@@ -2663,18 +2663,7 @@ impl DastYabApp {
         };
         let tx = self.tx.clone();
         bridge::spawn("selfupdate", tx, async move {
-            use dastyab_core::selfupdate::{
-                ensure_updated_with_swap_for, BinaryKind, UpdateOutcome,
-            };
-            let timeout = std::time::Duration::from_secs(if manual { 90 } else { 30 });
-            let msg = match ensure_updated_with_swap_for(BinaryKind::Gui, timeout).await {
-                Ok(UpdateOutcome::UpToDate) => format!("UP_TO_DATE::{manual}"),
-                Ok(UpdateOutcome::Updated { tag }) => format!("UPDATED::{tag}"),
-                Ok(UpdateOutcome::Staged { tag, path }) => format!("STAGED::{tag}::{path}"),
-                Ok(UpdateOutcome::Failed(err)) => format!("FAILED::{manual}::{err}"),
-                Err(e) => format!("FAILED::{manual}::{}", e.brief()),
-            };
-            Ok::<String, CFError>(msg)
+            Ok::<String, CFError>(run_gui_selfupdate(manual).await)
         });
     }
 
@@ -4826,6 +4815,18 @@ fn create_configs_from_ip(profile_id: &str, endpoint: &str) -> Result<(usize, St
     let _ = dastyab_core::cf::ips::learn_clean_ip(profile_id, &ip);
 
     Ok((n, base_link))
+}
+
+async fn run_gui_selfupdate(manual: bool) -> String {
+    use dastyab_core::selfupdate::{ensure_updated_with_swap_for, BinaryKind, UpdateOutcome};
+    let timeout = std::time::Duration::from_secs(if manual { 90 } else { 30 });
+    match ensure_updated_with_swap_for(BinaryKind::Gui, timeout).await {
+        Ok(UpdateOutcome::UpToDate) => format!("UP_TO_DATE::{manual}"),
+        Ok(UpdateOutcome::Updated { tag }) => format!("UPDATED::{tag}"),
+        Ok(UpdateOutcome::Staged { tag, path }) => format!("STAGED::{tag}::{path}"),
+        Ok(UpdateOutcome::Failed(err)) => format!("FAILED::{manual}::{err}"),
+        Err(e) => format!("FAILED::{manual}::{}", e.brief()),
+    }
 }
 
 /// Open a folder in the platform file manager.

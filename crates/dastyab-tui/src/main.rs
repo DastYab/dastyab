@@ -14,7 +14,7 @@ use std::sync::mpsc;
 
 use dastyab_core::selfupdate::{
     cleanup_stale_old_binary, ensure_updated_with_swap_for, should_auto_check, BinaryKind,
-    UpdateOutcome, INTERACTIVE_CHECK_INTERVAL_SECS,
+    UpdateOutcome,
 };
 use dastyab_core::store::profiles::{list_profiles, load_profile, migrate_legacy};
 
@@ -96,16 +96,14 @@ impl AutoUpdateUiState {
         };
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt
-                    .block_on(ensure_updated_with_swap_for(
+            let result = match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    let fut = ensure_updated_with_swap_for(
                         BinaryKind::Tui,
                         std::time::Duration::from_secs(90),
-                    ))
-                    .map_err(|e| e.brief()),
+                    );
+                    rt.block_on(fut).map_err(|e| e.brief())
+                }
                 Err(e) => Err(format!("runtime error: {e}")),
             };
             let _ = tx.send(result);
@@ -141,7 +139,8 @@ impl AutoUpdateUiState {
 fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<Option<std::path::PathBuf>> {
     let mut tab = Tab::Overview;
     let mut updater = AutoUpdateUiState::new();
-    if should_auto_check(INTERACTIVE_CHECK_INTERVAL_SECS) {
+    let interval = dastyab_core::selfupdate::INTERACTIVE_CHECK_INTERVAL_SECS;
+    if should_auto_check(interval) {
         updater.start_check(false);
     }
 

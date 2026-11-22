@@ -51,10 +51,9 @@ pub enum BinaryKind {
 impl BinaryKind {
     /// Detect which edition is currently running from `std::env::current_exe()`.
     pub fn detect_current() -> Self {
-        let name = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default();
+        let exe = std::env::current_exe().ok();
+        let fname = exe.as_deref().and_then(Path::file_name);
+        let name = fname.map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Self::detect_from_exe_name(&name)
     }
 
@@ -267,11 +266,7 @@ pub fn parse_tag_from_release_url(url: &str) -> Option<String> {
     let marker = "/releases/tag/";
     let idx = url.find(marker)?;
     let rest = &url[idx + marker.len()..];
-    let tag = rest
-        .split(['?', '#', '/'])
-        .next()
-        .unwrap_or("")
-        .trim();
+    let tag = rest.split(['?', '#', '/']).next().unwrap_or("").trim();
     if tag.is_empty() || tag == "latest" {
         None
     } else {
@@ -316,20 +311,21 @@ fn build_http_client(
     socks_port: Option<u16>,
     follow_redirects: bool,
 ) -> Result<reqwest::Client, CFError> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(timeout)
-        .user_agent(format!("dastyab-selfupdate/{}", crate::VERSION));
+    let ua = format!("dastyab-selfupdate/{}", crate::VERSION);
+    let mut builder = reqwest::Client::builder().timeout(timeout).user_agent(ua);
     if !follow_redirects {
         builder = builder.redirect(reqwest::redirect::Policy::none());
     }
     if let Some(port) = socks_port {
-        let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
-            .map_err(|e| CFError::new("Updater error", format!("Invalid SOCKS5 proxy: {e}"), ""))?;
+        let url = format!("socks5h://127.0.0.1:{port}");
+        let proxy = reqwest::Proxy::all(url).map_err(|e| {
+            CFError::new("Updater error", format!("Invalid SOCKS5 proxy: {e}"), "")
+        })?;
         builder = builder.proxy(proxy);
     }
-    builder
-        .build()
-        .map_err(|e| CFError::new("Updater error", format!("{e}"), "Internal HTTP client error."))
+    builder.build().map_err(|e| {
+        CFError::new("Updater error", format!("{e}"), "Internal HTTP client error.")
+    })
 }
 
 async fn candidate_clients(timeout: Duration, follow_redirects: bool) -> Vec<reqwest::Client> {
@@ -381,11 +377,7 @@ async fn fetch_release_via_api(client: &reqwest::Client) -> Result<ReleaseInfo, 
         CFError::new("Updater error", format!("{e}"), "Malformed GitHub API response.")
     })?;
 
-    let tag = body
-        .get("tag_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let tag = body["tag_name"].as_str().unwrap_or("").to_string();
     if tag.is_empty() {
         return Err(CFError::new(
             "Updater error",
@@ -397,21 +389,9 @@ async fn fetch_release_via_api(client: &reqwest::Client) -> Result<ReleaseInfo, 
     let mut assets = Vec::new();
     if let Some(arr) = body.get("assets").and_then(|a| a.as_array()) {
         for a in arr {
-            let name = a
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let url = a
-                .get("browser_download_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let api_url = a
-                .get("url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let name = a["name"].as_str().unwrap_or("").to_string();
+            let url = a["browser_download_url"].as_str().unwrap_or("").to_string();
+            let api_url = a["url"].as_str().unwrap_or("").to_string();
             if !name.is_empty() {
                 assets.push(ReleaseAsset { name, url, api_url });
             }
@@ -484,13 +464,14 @@ pub async fn latest_release(timeout: Duration) -> Result<ReleaseInfo, CFError> {
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
+    let err = last_err.unwrap_or_else(|| {
         CFError::new(
             "Updater error",
             "Could not reach GitHub Releases.",
             "Check your network connection or connect DastYab proxy first.",
         )
-    }))
+    });
+    Err(err)
 }
 
 /// Determine whether an update is available. Returns `(available, newest_tag)`.
@@ -514,33 +495,31 @@ pub fn asset_for_target(
     }
 
     let slug = platform_slug_for(os, arch)?;
-    assets
-        .iter()
-        .find(|a| {
-            let n = a.name.to_ascii_lowercase();
-            if !n.contains(slug)
-                || n.ends_with(".deb")
-                || n.contains("portable")
-                || n.ends_with(".apk")
-                || n.ends_with(".py")
-                || n.ends_with(".sh")
-                || n.ends_with(".txt")
-            {
-                return false;
-            }
-            if os == "windows" && !n.ends_with(".exe") {
-                return false;
-            }
-            if os != "windows" && n.ends_with(".exe") {
-                return false;
-            }
-            match kind {
-                BinaryKind::Cli => !n.contains("gui") && !n.contains("tui"),
-                BinaryKind::Gui => n.contains("gui") && !n.contains("tui"),
-                BinaryKind::Tui => n.contains("tui") && !n.contains("gui"),
-            }
-        })
-        .cloned()
+    for a in assets {
+        let n = a.name.to_ascii_lowercase();
+        if !n.contains(slug)
+            || n.ends_with(".deb")
+            || n.contains("portable")
+            || n.ends_with(".apk")
+            || n.ends_with(".py")
+            || n.ends_with(".sh")
+            || n.ends_with(".txt")
+        {
+            continue;
+        }
+        if (os == "windows" && !n.ends_with(".exe")) || (os != "windows" && n.ends_with(".exe")) {
+            continue;
+        }
+        let kind_ok = match kind {
+            BinaryKind::Cli => !n.contains("gui") && !n.contains("tui"),
+            BinaryKind::Gui => n.contains("gui") && !n.contains("tui"),
+            BinaryKind::Tui => n.contains("tui") && !n.contains("gui"),
+        };
+        if kind_ok {
+            return Some(a.clone());
+        }
+    }
+    None
 }
 
 /// Pick the matching release asset for the given binary edition on the host OS/arch.
@@ -728,8 +707,9 @@ enum SwapPlacement {
 
 fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
     let dir = mem_dir().join("bin");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| CFError::new("Storage error", format!("{e}"), "Check permissions."))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        CFError::new("Storage error", format!("{e}"), "Check permissions.")
+    })?;
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));
     atomic_write(&target, payload)?;
@@ -873,8 +853,9 @@ pub async fn ensure_updated_with_swap_for(
         return Ok(UpdateOutcome::Failed(msg));
     }
 
-    let exe = std::env::current_exe()
-        .map_err(|e| CFError::new("Updater error", e.to_string(), "Cannot locate the binary."))?;
+    let exe = std::env::current_exe().map_err(|e| {
+        CFError::new("Updater error", e.to_string(), "Cannot locate the binary.")
+    })?;
     match install_payload_at(&exe, kind, &body) {
         Ok(SwapPlacement::ReplacedInPlace) => {
             let note = format!("Updated {} to {}", kind.label(), rel.tag);
@@ -992,10 +973,8 @@ mod tests {
 
     #[test]
     fn binary_kind_detects_from_exe_name() {
-        assert_eq!(
-            BinaryKind::detect_from_exe_name("dastyab-gui-windows-amd64.exe"),
-            BinaryKind::Gui
-        );
+        let gui = BinaryKind::detect_from_exe_name("dastyab-gui-windows-amd64.exe");
+        assert_eq!(gui, BinaryKind::Gui);
         assert_eq!(BinaryKind::detect_from_exe_name("dastyab-tui"), BinaryKind::Tui);
         assert_eq!(BinaryKind::detect_from_exe_name("dastyab"), BinaryKind::Cli);
     }
@@ -1058,18 +1037,15 @@ mod tests {
     #[test]
     fn update_outcome_discriminants() {
         assert_eq!(UpdateOutcome::UpToDate, UpdateOutcome::UpToDate);
-        assert_eq!(
-            UpdateOutcome::Updated { tag: "v1".into() },
-            UpdateOutcome::Updated { tag: "v1".into() }
-        );
-        assert_ne!(
-            UpdateOutcome::Updated { tag: "v1".into() },
-            UpdateOutcome::Updated { tag: "v2".into() }
-        );
-        assert_eq!(
-            UpdateOutcome::Staged { tag: "v1".into(), path: "/tmp/a".into() },
-            UpdateOutcome::Staged { tag: "v1".into(), path: "/tmp/a".into() }
-        );
+        let u1 = UpdateOutcome::Updated { tag: "v1".into() };
+        let u2 = UpdateOutcome::Updated { tag: "v2".into() };
+        assert_eq!(u1, u1.clone());
+        assert_ne!(u1, u2);
+        let s1 = UpdateOutcome::Staged {
+            tag: "v1".into(),
+            path: "/tmp/a".into(),
+        };
+        assert_eq!(s1, s1.clone());
         assert_eq!(UpdateOutcome::Failed("x".into()), UpdateOutcome::Failed("x".into()));
     }
 
