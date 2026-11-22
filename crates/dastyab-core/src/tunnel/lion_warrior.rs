@@ -344,6 +344,18 @@ impl ChainHop {
     pub fn is_socks_or_http(&self) -> bool {
         matches!(self.scheme, HopScheme::Socks5 | HopScheme::Http)
     }
+
+    pub fn param_val<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        match self.params.get(key) {
+            Some(s) => s.as_str(),
+            None => default,
+        }
+    }
+}
+
+fn set_default_param(params: &mut HashMap<String, String>, key: &str, value: &str) {
+    let k = key.to_string();
+    params.entry(k).or_insert_with(|| value.to_string());
 }
 
 /// Parse any proxy URI (`vless://`, `vmess://`, `trojan://`, `ss://`, `socks5://`, `http://`).
@@ -384,7 +396,8 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
     })?;
 
     let mut params = HashMap::new();
-    if let Some(qpart) = trimmed.split('#').next().and_then(|s| s.split_once('?')).map(|x| x.1) {
+    let before_hash = trimmed.split('#').next().unwrap_or(trimmed);
+    if let Some((_, qpart)) = before_hash.split_once('?') {
         for pair in qpart.split('&') {
             if let Some((k, v)) = pair.split_once('=') {
                 if !k.is_empty() {
@@ -397,29 +410,29 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
     match parsed.scheme.as_str() {
         "vless" => {
             let vp = VlessProfile::parse(trimmed)?;
-            params.entry("security".to_string()).or_insert_with(|| vp.security.clone());
-            params.entry("type".to_string()).or_insert_with(|| vp.transport.clone());
+            set_default_param(&mut params, "security", &vp.security);
+            set_default_param(&mut params, "type", &vp.transport);
             if let Some(sni) = &vp.sni {
-                params.entry("sni".to_string()).or_insert_with(|| sni.clone());
+                set_default_param(&mut params, "sni", sni);
             }
             if let Some(hh) = &vp.header_host {
-                params.entry("host".to_string()).or_insert_with(|| hh.clone());
+                set_default_param(&mut params, "host", hh);
             }
-            params.entry("path".to_string()).or_insert_with(|| vp.canonical_path());
+            set_default_param(&mut params, "path", &vp.canonical_path());
             if let Some(pbk) = &vp.pbk {
-                params.entry("pbk".to_string()).or_insert_with(|| pbk.clone());
+                set_default_param(&mut params, "pbk", pbk);
             }
             if let Some(sid) = &vp.sid {
-                params.entry("sid".to_string()).or_insert_with(|| sid.clone());
+                set_default_param(&mut params, "sid", sid);
             }
             if let Some(spx) = &vp.spx {
-                params.entry("spx".to_string()).or_insert_with(|| spx.clone());
+                set_default_param(&mut params, "spx", spx);
             }
             if let Some(fp) = &vp.fp {
-                params.entry("fp".to_string()).or_insert_with(|| fp.clone());
+                set_default_param(&mut params, "fp", fp);
             }
             if let Some(flow) = &vp.flow {
-                params.entry("flow".to_string()).or_insert_with(|| flow.clone());
+                set_default_param(&mut params, "flow", flow);
             }
             Ok(ChainHop {
                 scheme: HopScheme::Vless,
@@ -491,8 +504,8 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
             })
         }
         "trojan" => {
-            params.entry("security".to_string()).or_insert_with(|| "tls".to_string());
-            params.entry("type".to_string()).or_insert_with(|| "tcp".to_string());
+            set_default_param(&mut params, "security", "tls");
+            set_default_param(&mut params, "type", "tcp");
             Ok(ChainHop {
                 scheme: HopScheme::Trojan,
                 host: parsed.host,
@@ -839,7 +852,7 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                 "id": hop.auth_id,
                 "encryption": "none"
             });
-            let sec = hop.params.get("security").map(|s| s.as_str()).unwrap_or("none");
+            let sec = hop.param_val("security", "none");
             if matches!(sec, "tls" | "reality") {
                 if let Some(flow) = hop.params.get("flow").filter(|f| !f.is_empty()) {
                     user["flow"] = serde_json::json!(flow);
@@ -879,18 +892,25 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                 }]
             }
         }),
-        HopScheme::Shadowsocks => serde_json::json!({
-            "tag": tag,
-            "protocol": "shadowsocks",
-            "settings": {
-                "servers": [{
-                    "address": hop.host,
-                    "port": hop.port,
-                    "method": if hop.method.is_empty() { "aes-256-gcm" } else { &hop.method },
-                    "password": hop.secret
-                }]
-            }
-        }),
+        HopScheme::Shadowsocks => {
+            let method = if hop.method.is_empty() {
+                "aes-256-gcm"
+            } else {
+                &hop.method
+            };
+            serde_json::json!({
+                "tag": tag,
+                "protocol": "shadowsocks",
+                "settings": {
+                    "servers": [{
+                        "address": hop.host,
+                        "port": hop.port,
+                        "method": method,
+                        "password": hop.secret
+                    }]
+                }
+            })
+        }
         HopScheme::WireGuard => {
             let addr = hop
                 .params
@@ -908,7 +928,7 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                     "address": addr,
                     "mtu": mtu,
                     "peers": [{
-                        "publicKey": hop.params.get("publickey").map(|s| s.as_str()).unwrap_or(""),
+                        "publicKey": hop.param_val("publickey", ""),
                         "endpoint": format!("{}:{}", hop.host, hop.port)
                     }]
                 }
@@ -951,8 +971,8 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
     };
 
     if !hop.is_socks_or_http() && hop.scheme != HopScheme::WireGuard {
-        let sec = hop.params.get("security").map(|s| s.as_str()).unwrap_or("none");
-        let net = hop.params.get("type").map(|s| s.as_str()).unwrap_or("tcp");
+        let sec = hop.param_val("security", "none");
+        let net = hop.param_val("type", "tcp");
         let sni = hop
             .params
             .get("sni")
@@ -986,9 +1006,9 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
             ss["realitySettings"] = serde_json::json!({
                 "serverName": sni,
                 "fingerprint": fp,
-                "publicKey": hop.params.get("pbk").map(|s| s.as_str()).unwrap_or(""),
-                "shortId": hop.params.get("sid").map(|s| s.as_str()).unwrap_or(""),
-                "spiderX": hop.params.get("spx").map(|s| s.as_str()).unwrap_or("/")
+                "publicKey": hop.param_val("pbk", ""),
+                "shortId": hop.param_val("sid", ""),
+                "spiderX": hop.param_val("spx", "/")
             });
         } else if sec == "tls" {
             let mut tls = serde_json::json!({
@@ -996,9 +1016,8 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                 "fingerprint": fp
             });
             if let Some(alpn) = hop.params.get("alpn").filter(|s| !s.is_empty()) {
-                tls["alpn"] = serde_json::json!(
-                    alpn.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()
-                );
+                let list: Vec<&str> = alpn.split(',').filter(|x| !x.is_empty()).collect();
+                tls["alpn"] = serde_json::json!(list);
             }
             ss["tlsSettings"] = tls;
         }
@@ -1013,11 +1032,11 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                 ss["xhttpSettings"] = serde_json::json!({
                     "path": path,
                     "host": hdr_host,
-                    "mode": hop.params.get("mode").map(|s| s.as_str()).unwrap_or("auto")
+                    "mode": hop.param_val("mode", "auto")
                 });
             }
             "grpc" => {
-                let svc = hop.params.get("serviceName").map(|s| s.as_str()).unwrap_or("");
+                let svc = hop.param_val("serviceName", "");
                 ss["grpcSettings"] = serde_json::json!({ "serviceName": svc });
             }
             _ => {}
@@ -1042,7 +1061,8 @@ pub struct BrutalChainPlan {
 
 impl BrutalChainPlan {
     pub fn arm_id(&self) -> String {
-        let hops_id = self.hops.iter().map(|h| h.key()).collect::<Vec<_>>().join("<-");
+        let keys: Vec<String> = self.hops.iter().map(ChainHop::key).collect();
+        let hops_id = keys.join("<-");
         if self.fragment_dpi {
             format!("{hops_id}+frag")
         } else {
@@ -1055,7 +1075,8 @@ impl BrutalChainPlan {
 /// strict TLS-ClientHello JA3/JA4 classifiers without changing the upstream node.
 pub fn mutate_hop_fingerprint(hop: &ChainHop, fingerprint: &str) -> ChainHop {
     let mut cloned = hop.clone();
-    cloned.params.insert("fp".to_string(), fingerprint.to_string());
+    let fp = fingerprint.to_string();
+    cloned.params.insert("fp".to_string(), fp);
     cloned
 }
 
@@ -1260,11 +1281,12 @@ pub fn generate_brutal_chains(
             for exit in ordered_exits.iter().take(3) {
                 let mut chain = vec![(*exit).clone()];
                 let mut used_keys = HashSet::from([exit.key()]);
+                let reserve = usize::from(!local_proxies.is_empty());
                 for hop in &combined_entries {
                     if !hop.is_local_bridge && used_keys.insert(hop.key()) {
                         chain.push(hop.clone());
                     }
-                    if chain.len() + if local_proxies.is_empty() { 0 } else { 1 } >= target_depth {
+                    if chain.len() + reserve >= target_depth {
                         break;
                     }
                 }
@@ -1321,8 +1343,9 @@ pub fn record_blocked_exit(profile_id: &str, persona: ServicePersona, key: &str)
     let path = blacklist_path(profile_id, persona);
     let mut store: PersonaBlacklist = read_opt(&path).unwrap_or_default();
     let now = crate::store::now_ts();
-    store.blocked_exits.retain(|_, ts| now - *ts < EXIT_BLACKLIST_TTL_SECS);
-    store.blocked_exits.insert(key.to_string(), now);
+    let map = &mut store.blocked_exits;
+    map.retain(|_, ts| now - *ts < EXIT_BLACKLIST_TTL_SECS);
+    map.insert(key.to_string(), now);
     let _ = write_json(&path, &store);
 }
 
@@ -1332,7 +1355,8 @@ pub fn is_exit_blacklisted(profile_id: &str, persona: ServicePersona, key: &str)
         return false;
     };
     let now = crate::store::now_ts();
-    store.blocked_exits.get(key).is_some_and(|ts| now - *ts < EXIT_BLACKLIST_TTL_SECS)
+    let ts = store.blocked_exits.get(key);
+    ts.is_some_and(|t| now - *t < EXIT_BLACKLIST_TTL_SECS)
 }
 
 // ---------------------------------------------------------------------------
@@ -1477,13 +1501,15 @@ pub async fn verify_persona_through_socks(
 
     if let Some(req_cc) = want_country.filter(|c| !c.trim().is_empty()) {
         if !g.country.eq_ignore_ascii_case(req_cc.trim()) {
+            let got = &g.country;
+            let want = req_cc.to_uppercase();
             return Ok(PersonaAccessReport {
                 persona,
                 ok: false,
                 egress_ip: Some(ip),
                 geo: Some(g.clone()),
                 checks: Vec::new(),
-                reason: format!("country {} != requested {}", g.country, req_cc.to_uppercase()),
+                reason: format!("country {got} != requested {want}"),
             });
         }
     }
@@ -1810,16 +1836,21 @@ pub async fn start_cascade_socks_proxy(
 ) -> Result<CascadeProxyHandle, CFError> {
     for h in &hops {
         if !h.is_socks_or_http() {
+            let got = h.scheme.as_str();
             return Err(CFError::new(
                 "cascade",
-                format!("native cascade supports socks5/http hops, got {}", h.scheme.as_str()),
+                format!("native cascade supports socks5/http hops, got {got}"),
                 "Use build_xray_chain_config for vless/vmess/trojan/ss chains.",
             ));
         }
     }
-    let listener = TcpListener::bind(("127.0.0.1", bind_port))
-        .await
-        .map_err(|e| CFError::new("cascade", format!("bind 127.0.0.1:{bind_port}: {e}"), ""))?;
+    let listener = match TcpListener::bind(("127.0.0.1", bind_port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            let msg = format!("bind 127.0.0.1:{bind_port}: {e}");
+            return Err(CFError::new("cascade", msg, ""));
+        }
+    };
     let local_addr = listener
         .local_addr()
         .map_err(|e| CFError::new("cascade", format!("local_addr: {e}"), ""))?;
@@ -1860,7 +1891,8 @@ async fn handle_socks_client(
     let mut req = [0u8; 4];
     client.read_exact(&mut req).await?;
     if req[1] != 0x01 {
-        let _ = client.write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+        let err_rep = [0x05u8, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+        let _ = client.write_all(&err_rep).await;
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "only CONNECT",
@@ -1885,7 +1917,8 @@ async fn handle_socks_client(
             std::net::Ipv6Addr::from(ip).to_string()
         }
         _ => {
-            let _ = client.write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+            let err_rep = [0x05u8, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+            let _ = client.write_all(&err_rep).await;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "bad atyp",
@@ -1910,7 +1943,8 @@ async fn handle_socks_client(
         dial_through_proxy(&mut stream, hop, next_host, next_port).await?;
     }
 
-    client.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
+    let ok_rep = [0x05u8, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+    client.write_all(&ok_rep).await?;
     let _ = tokio::io::copy_bidirectional(&mut client, &mut stream).await;
     Ok(())
 }
@@ -2118,7 +2152,8 @@ mod tests {
         assert!(
             !evaluate_lion_response(200, "https://aistudio.google.com/unsupported-country", "").0
         );
-        assert!(evaluate_lion_response(200, "https://aistudio.google.com/", "<html>app</html>").0);
+        let ai_url = "https://aistudio.google.com/";
+        assert!(evaluate_lion_response(200, ai_url, "<html>app</html>").0);
         assert!(
             !evaluate_warrior_response(200, "https://flow.google.com/", "<html>nope</html>", true).0
         );
@@ -2138,9 +2173,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::store::set_mem_dir_override(dir.path().join(".dastyab"));
         let pid = crate::store::profiles::create_profile("lw-iso", "t").unwrap();
-        record_blocked_exit(&pid, ServicePersona::WarriorFlow, "1.2.3.4:443");
-        assert!(is_exit_blacklisted(&pid, ServicePersona::WarriorFlow, "1.2.3.4:443"));
-        assert!(!is_exit_blacklisted(&pid, ServicePersona::LionAiStudio, "1.2.3.4:443"));
+        let ex = "1.2.3.4:443";
+        record_blocked_exit(&pid, ServicePersona::WarriorFlow, ex);
+        assert!(is_exit_blacklisted(&pid, ServicePersona::WarriorFlow, ex));
+        assert!(!is_exit_blacklisted(&pid, ServicePersona::LionAiStudio, ex));
         crate::store::clear_mem_dir_override();
     }
 
@@ -2182,7 +2218,8 @@ mod tests {
                 let first_line = req.lines().next().unwrap_or("");
                 let hp = first_line.split_whitespace().nth(1).unwrap_or("");
                 if let Ok(mut dst) = TcpStream::connect(hp).await {
-                    let _ = s.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await;
+                    let ok_resp = b"HTTP/1.1 200 Connection Established\r\n\r\n";
+                    let _ = s.write_all(ok_resp).await;
                     let _ = tokio::io::copy_bidirectional(&mut s, &mut dst).await;
                 }
             }

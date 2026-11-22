@@ -343,7 +343,8 @@ pub async fn probe_flow_access_with_ext(
         ));
     }
 
-    let hint = (!cfg.country_hint.trim().is_empty()).then_some(cfg.country_hint.as_str());
+    let raw_hint = cfg.country_hint.trim();
+    let hint = (!raw_hint.is_empty()).then_some(raw_hint);
     let report = crate::tunnel::lion_warrior::verify_persona_through_socks(
         flow_port,
         crate::tunnel::lion_warrior::ServicePersona::WarriorFlow,
@@ -400,7 +401,8 @@ async fn probe_ai_access_with_ext(
         ));
     }
 
-    let hint = (!cfg.country_hint.trim().is_empty()).then_some(cfg.country_hint.as_str());
+    let raw_hint = cfg.country_hint.trim();
+    let hint = (!raw_hint.is_empty()).then_some(raw_hint);
     let res = crate::tunnel::lion_warrior::verify_persona_through_socks(
         PROXY_SOCKS_PORT,
         crate::tunnel::lion_warrior::ServicePersona::LionAiStudio,
@@ -534,7 +536,8 @@ pub async fn probe_gemini_api_cfg(
     })?;
 
     let cfg_json = profile.xray_client_json_at_port(PROXY_SOCKS_PORT)?;
-    let cfg_path = std::env::temp_dir().join(format!("dyb-gemini-{}.json", crate::store::new_id()));
+    let cfg_name = format!("dyb-gemini-{}.json", crate::store::new_id());
+    let cfg_path = std::env::temp_dir().join(cfg_name);
     std::fs::write(&cfg_path, &cfg_json)
         .map_err(|e| CFError::new("multilayer", format!("write xray cfg: {e}"), ""))?;
 
@@ -688,7 +691,8 @@ pub fn launch_xray_with_ext(
         )
     })?;
     let cfg_json = build_chain_xray_json(cfg, ext, socks_port)?;
-    let cfg_path = std::env::temp_dir().join(format!("dyb-tunnel-{}.json", crate::store::new_id()));
+    let cfg_name = format!("dyb-tunnel-{}.json", crate::store::new_id());
+    let cfg_path = std::env::temp_dir().join(cfg_name);
     std::fs::write(&cfg_path, &cfg_json)
         .map_err(|e| CFError::new("multilayer", format!("write xray cfg: {e}"), ""))?;
     let child = tokio::process::Command::new(&xray)
@@ -790,8 +794,8 @@ pub async fn start_tunnel_mode_for_persona(
                 }
             };
             if let Some(chrome) = chrome {
-                let country = (!cfg.country_hint.trim().is_empty())
-                    .then_some(cfg.country_hint.as_str());
+                let raw_hint = cfg.country_hint.trim();
+                let country = (!raw_hint.is_empty()).then_some(raw_hint);
                 let (_, tz) = crate::tunnel::lion_warrior::country_to_locale_tz(country);
                 let args = crate::tunnel::lion_warrior::hardened_chrome_args(
                     socks_port,
