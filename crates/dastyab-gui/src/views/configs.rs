@@ -30,10 +30,12 @@ pub enum ConfigsSort {
 /// Actions the configs view can request of the app shell.
 #[derive(Debug)]
 pub enum ConfigsAction {
-    /// Write every matching generated config to disk under the export folder.
+    /// Export every matching generated config to disk under the export folder.
     ExportAll,
     /// Open the "create config from a clean IP" dialog (no redeploy).
     CreateFromIp,
+    /// Import configs from a `.txt`, `.sub`, `.yaml`, `.ovpn`, `.npvt`, or JSON file.
+    ImportFromFile,
     /// Edit a single config's content in place (opens a text-area dialog).
     Edit { id: u64, current: String },
     /// Rename a single config's label (opens a text dialog).
@@ -158,10 +160,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut crate::app::DastYabApp) -> Option<Confi
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .button("💾 Export all")
-                .on_hover_text("Write every generated config to disk under ~/.dastyab/exported_configs/<profile>/")
+                .on_hover_text(
+                    "Write every generated config to disk under ~/.dastyab/exported_configs/<profile>/",
+                )
                 .clicked()
             {
                 action = Some(ConfigsAction::ExportAll);
+            }
+            ui.add_space(6.0);
+            if ui
+                .button("📥 Import config file (.txt/…)")
+                .on_hover_text(
+                    "Import configs from .txt, .sub, .yaml, .json, .ovpn, .npvt, .hc, .ehi, etc.",
+                )
+                .clicked()
+            {
+                action = Some(ConfigsAction::ImportFromFile);
             }
             ui.add_space(6.0);
             // Create-config-from-IP is the "deploy once, configure many"
@@ -392,6 +406,13 @@ pub fn run_action(
             Some(crate::dialogs::prompt_text(
                 "Create config from clean IP",
                 "IP or ip:port (e.g. 104.16.1.1 or 104.16.1.1:443)",
+            ))
+        }
+        ConfigsAction::ImportFromFile => {
+            app.pending_action = Some(PendingDialogAction::ImportConfigsFromPath);
+            Some(crate::dialogs::prompt_text(
+                "Import config file (.txt / .sub / .yaml / .ovpn / .json)",
+                "Path to config file (e.g. /home/user/619_servers.txt)",
             ))
         }
         ConfigsAction::Edit { id, current } => {

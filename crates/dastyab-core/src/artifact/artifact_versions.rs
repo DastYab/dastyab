@@ -494,7 +494,9 @@ pub fn doctor_check_versions(_profile_dir: &Path, health: &VersioningHealth) -> 
             return CheckResult {
                 name,
                 status: CheckStatus::Warn,
-                detail: format!("last successful prune was > 7 days ago ({last}) — version history may be stale"),
+                detail: format!(
+                    "last successful prune was > 7 days ago ({last}) — version history may be stale"
+                ),
             };
         }
     }

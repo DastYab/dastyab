@@ -236,6 +236,8 @@ object TunnelConfig {
         val flowProxyChain: String = ""
     ) {
         fun parsedEndpoint(): VlessEndpoint? = parseVlessUri(vlessUri)
+        fun parsedAnyEndpoint(): UniversalConfig.ParsedEndpoint? =
+            UniversalConfig.parse(vlessUri.ifBlank { bootstrapConfig })
     }
 
     fun load(context: Context): Settings {
@@ -392,8 +394,18 @@ object TunnelConfig {
         )
     }
 
+    fun saveActiveConfigUri(context: Context, uri: String) {
+        val trimmed = uri.trim()
+        val current = load(context)
+        if (trimmed.startsWith("vless://", ignoreCase = true)) {
+            save(context, current.copy(vlessUri = trimmed))
+        } else {
+            save(context, current.copy(vlessUri = "", bootstrapConfig = trimmed))
+        }
+    }
+
     fun saveHarvestedConfigs(context: Context, configs: List<String>) {
-        val cleaned = configs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(300)
+        val cleaned = configs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(4096)
         prefs(context).edit()
             .putString(KEY_HARVESTED_CONFIGS, cleaned.joinToString("\n"))
             .apply()
@@ -409,7 +421,7 @@ object TunnelConfig {
         val cleaned = hops
             .filter { it.scheme != ProxyScheme.DIRECT && it.port in 1..MAX_PORT && it.host.isNotBlank() }
             .distinctBy { "${it.scheme.name}:${it.host}:${it.port}" }
-            .take(400)
+            .take(2048)
             .map { it.toUriString() }
         prefs(context).edit()
             .putString(KEY_HARVESTED_PROXY_HOPS, cleaned.joinToString("\n"))

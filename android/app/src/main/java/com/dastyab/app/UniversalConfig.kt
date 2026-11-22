@@ -52,7 +52,7 @@ object UniversalConfig {
         "wireguard", "wg", "warp", "amneziawg",
         "openvpn", "ovpn",
         "npv4", "npvs", "npvt", "npv", "napsternetv",
-        "socks5", "socks4", "socks", "ssh",
+        "socks5", "socks4", "socks", "http", "ssh",
         "sn", "dnstt", "slipnet",
         "mtproto"
     )
@@ -73,6 +73,11 @@ object UniversalConfig {
         RegexOption.IGNORE_CASE
     )
 
+    private val HTTP_PROXY_URI_REGEX = Regex(
+        """(?<![A-Za-z0-9+.-])http://(?:[^\s"'<>`\\@]+@)?(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):(\d{1,5})(?:/)?(?:#[^\s"'<>`\\]*)?(?=[\s"'<>`,;|#\r\n]|$)""",
+        RegexOption.IGNORE_CASE
+    )
+
     private val MTPROTO_URI_REGEX = Regex(
         """(?<![A-Za-z0-9+./-])(?:tg://proxy\?[^\s"'<>`\\]+|https?://(?:t\.me|telegram\.me)/proxy\?[^\s"'<>`\\]+)""",
         RegexOption.IGNORE_CASE
@@ -83,36 +88,76 @@ object UniversalConfig {
         RegexOption.IGNORE_CASE
     )
 
+    private val WEB_NON_PROXY_HOSTS = setOf(
+        "t.me", "telegram.me", "telegram.dog",
+        "github.com", "raw.githubusercontent.com", "gist.github.com",
+        "cdn.jsdelivr.net", "youtube.com", "www.youtube.com", "youtu.be",
+        "twitter.com", "x.com", "instagram.com", "google.com", "www.google.com"
+    )
+
     private val B64_TOKEN_REGEX = Regex("""[A-Za-z0-9+/_=-]{32,}""")
 
-    /** Extracts every supported config URI (including WireGuard INI blocks, MTProto links, and nested Base64 blobs). */
-    fun extractAll(rawPayload: String, maxConfigs: Int = 250): List<String> {
+    /** Returns true when an HTTP(S) URL is a web/channel/repo link (t.me, github.com, etc.), NOT an explicit proxy endpoint. */
+    fun isNonProxyHttpUrl(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("https://", ignoreCase = true)) return true
+        if (!trimmed.startsWith("http://", ignoreCase = true)) return false
+        val rest = trimmed.substring(7)
+        val noFrag = rest.substringBefore('#')
+        val authAndPath = noFrag.substringBefore('?')
+        val hasQuery = noFrag.contains('?')
+        if (hasQuery) return true
+        val slashIdx = authAndPath.indexOf('/')
+        if (slashIdx >= 0) {
+            val pathPart = authAndPath.substring(slashIdx)
+            if (pathPart.length > 1) return true
+        }
+        val authority = if (slashIdx >= 0) authAndPath.substring(0, slashIdx) else authAndPath
+        val hostPort = if (authority.contains('@')) authority.substringAfterLast('@') else authority
+        val hp = splitHostPort(hostPort) ?: return true
+        val hostLower = hp.first.lowercase()
+        if (hostLower in WEB_NON_PROXY_HOSTS || hostLower.endsWith(".t.me") || hostLower.endsWith(".github.com")) {
+            return true
+        }
+        return false
+    }
+
+    /** Extracts every supported config URI (including WireGuard INI, OpenVPN, Clash YAML, JSON outbounds, MTProto, and nested Base64). */
+    fun extractAll(rawPayload: String, maxConfigs: Int = 4096): List<String> {
         if (rawPayload.isBlank()) return emptyList()
         val unescaped = unescapeHtml(rawPayload)
         val found = LinkedHashSet<String>()
 
         collectDirectMatches(unescaped, found)
 
-        // Decode entire payload if it looks like a pure Base64 subscription
-        val fullDecoded = tryDecodeBase64(unescaped)
-        if (fullDecoded != null) {
+        // Multi-round decode when entire payload looks like a Base64 subscription (up to 3 layers)
+        var current = unescaped
+        for (round in 0 until 3) {
+            val fullDecoded = tryDecodeBase64(current) ?: break
             collectDirectMatches(fullDecoded, found)
+            current = fullDecoded
         }
 
         // Also scan standalone Base64 blobs embedded inside Telegram messages or mixed subscriptions
         var decodedChunks = 0
         for (match in B64_TOKEN_REGEX.findAll(unescaped)) {
-            if (decodedChunks >= 24) break
+            if (decodedChunks >= 256) break
             val token = match.value
-            // Skip tokens that are immediately part of a vmess:// / ssr:// / npv4:// URI already captured
             val start = match.range.first
             val prefixWindow = unescaped.substring((start - 14).coerceAtLeast(0), start)
             if (prefixWindow.contains("://")) continue
 
-            val decoded = tryDecodeBase64(token) ?: continue
-            if (decoded.contains("://") || decoded.contains("[Interface]", ignoreCase = true)) {
-                decodedChunks++
-                collectDirectMatches(decoded, found)
+            var inner = tryDecodeBase64(token) ?: continue
+            for (r in 0 until 2) {
+                val hasMarker = inner.contains("://") ||
+                    inner.contains("[Interface]", ignoreCase = true) ||
+                    inner.contains("\"outbounds\"") ||
+                    inner.contains("proxies:")
+                if (hasMarker) {
+                    decodedChunks++
+                    collectDirectMatches(inner, found)
+                }
+                inner = tryDecodeBase64(inner) ?: break
             }
         }
 
@@ -125,6 +170,10 @@ object UniversalConfig {
         URI_REGEX.findAll(text).forEach { m ->
             val cleaned = cleanUri(m.value)
             if (isPlausible(cleaned)) out.add(cleaned)
+        }
+        HTTP_PROXY_URI_REGEX.findAll(text).forEach { m ->
+            val cleaned = cleanUri(m.value)
+            if (!isNonProxyHttpUrl(cleaned) && parse(cleaned) != null) out.add(cleaned)
         }
         MTPROTO_URI_REGEX.findAll(text).forEach { m ->
             val cleaned = cleanUri(m.value)
@@ -139,6 +188,12 @@ object UniversalConfig {
         }
         extractOpenVpnConfigs(text).forEach { ovpnUri ->
             if (parse(ovpnUri) != null) out.add(ovpnUri)
+        }
+        extractClashYamlConfigs(text).forEach { clashUri ->
+            if (parse(clashUri) != null) out.add(clashUri)
+        }
+        extractJsonConfigs(text).forEach { jsonUri ->
+            if (parse(jsonUri) != null) out.add(jsonUri)
         }
     }
 
@@ -175,6 +230,15 @@ object UniversalConfig {
                 "proto" -> if (parts.size >= 2) proto = parts[1].lowercase()
                 "dev" -> if (parts.size >= 2) dev = parts[1].lowercase()
                 "cipher", "data-ciphers" -> if (parts.size >= 2) cipher = parts[1]
+                "http-proxy", "socks-proxy" -> if (parts.size >= 3) {
+                    val host = parts[1].trim()
+                    val port = parts[2].toIntOrNull()?.takeIf { it in 1..65535 }
+                    if (port != null && host.isNotEmpty() && !host.contains('/') && !host.any { it.isWhitespace() }) {
+                        val scheme = if (parts[0].equals("socks-proxy", true)) "socks5" else "http"
+                        val formattedHost = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+                        out.add("$scheme://$formattedHost:$port")
+                    }
+                }
                 "remote" -> if (parts.size >= 2) {
                     val host = parts[1].trim()
                     val port = parts.getOrNull(2)?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 1194
@@ -189,6 +253,154 @@ object UniversalConfig {
                     }
                 }
             }
+        }
+        return out.toList()
+    }
+
+    /** Extracts Clash / Mihomo YAML proxy blocks (both flow `- {...}` and multi-line `- name:` items) into share URIs. */
+    fun extractClashYamlConfigs(rawText: String): List<String> {
+        if (!rawText.contains("server:", ignoreCase = true) ||
+            (!rawText.contains("proxies:", ignoreCase = true) && !rawText.contains("type:", ignoreCase = true))
+        ) {
+            return emptyList()
+        }
+        val out = LinkedHashSet<String>()
+        val normalized = rawText.replace("\r\n", "\n").replace('\r', '\n')
+
+        fun buildFromMap(fields: Map<String, String>) {
+            val type = fields["type"]?.lowercase()?.trim() ?: return
+            val host = fields["server"]?.trim()?.trim('"', '\'') ?: return
+            val port = fields["port"]?.trim()?.trim('"', '\'')?.toIntOrNull() ?: return
+            if (host.isBlank() || host == "127.0.0.1" || host == "0.0.0.0" || port !in 1..65535) return
+            val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+            val name = urlEncode((fields["name"] ?: "Clash-$type").trim('"', '\''))
+            val sni = fields["sni"] ?: fields["servername"] ?: ""
+            val pass = fields["password"] ?: fields["uuid"] ?: "dastyab"
+            val uuid = fields["uuid"] ?: fields["id"] ?: "11111111-1111-1111-1111-111111111111"
+            val network = fields["network"] ?: "tcp"
+            val uri = when (type) {
+                "vless" -> "vless://${urlEncode(uuid)}@$h:$port?type=${urlEncode(network)}" +
+                    (if (sni.isNotBlank()) "&sni=${urlEncode(sni)}" else "") + "#$name"
+                "trojan" -> "trojan://${urlEncode(pass)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "hy2", "hysteria2" -> "hy2://${urlEncode(pass)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "hysteria" -> "hysteria://$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "tuic" -> "tuic://${urlEncode(uuid)}:${urlEncode(pass)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "wireguard", "wg" -> "wireguard://${urlEncode(fields["private-key"] ?: pass)}@$h:$port" +
+                    (if (!fields["public-key"].isNullOrBlank()) "?publickey=${urlEncode(fields["public-key"]!!)}" else "") + "#$name"
+                "socks5", "socks" -> "socks5://$h:$port#$name"
+                "http" -> "http://$h:$port#$name"
+                "ss" -> {
+                    val cipher = fields["cipher"] ?: "aes-256-gcm"
+                    "ss://${urlEncode(cipher)}:${urlEncode(pass)}@$h:$port#$name"
+                }
+                else -> null
+            }
+            if (uri != null && parse(uri) != null) out.add(uri)
+        }
+
+        // 1. Flow items: - {name: "...", type: vless, server: 1.2.3.4, port: 443}
+        val flowRegex = Regex("""-\s*\{([^\}\n]{12,1024})\}""")
+        for (m in flowRegex.findAll(normalized)) {
+            val map = LinkedHashMap<String, String>()
+            for (part in m.groupValues[1].split(',')) {
+                val colon = part.indexOf(':')
+                if (colon > 0) {
+                    val k = part.substring(0, colon).trim().lowercase()
+                    val v = part.substring(colon + 1).trim().trim('"', '\'')
+                    if (v.isNotEmpty()) map[k] = v
+                }
+            }
+            buildFromMap(map)
+        }
+
+        // 2. Block items: - name: ... \n  type: ... \n  server: ... \n  port: ...
+        var currentMap = LinkedHashMap<String, String>()
+        var inProxyItem = false
+        for (rawLine in normalized.lines()) {
+            val trimmed = rawLine.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+            if (trimmed.startsWith("- ") && !trimmed.startsWith("- {")) {
+                if (inProxyItem) buildFromMap(currentMap)
+                currentMap = LinkedHashMap()
+                inProxyItem = true
+                val rest = trimmed.substring(2).trim()
+                val colon = rest.indexOf(':')
+                if (colon > 0) {
+                    currentMap[rest.substring(0, colon).trim().lowercase()] =
+                        rest.substring(colon + 1).trim().trim('"', '\'')
+                }
+            } else if (inProxyItem) {
+                val isIndented = rawLine.startsWith(" ") || rawLine.startsWith("\t")
+                if (!isIndented) {
+                    buildFromMap(currentMap)
+                    currentMap = LinkedHashMap()
+                    inProxyItem = false
+                } else {
+                    val colon = trimmed.indexOf(':')
+                    if (colon > 0) {
+                        val k = trimmed.substring(0, colon).trim().lowercase()
+                        val v = trimmed.substring(colon + 1).trim().trim('"', '\'')
+                        if (v.isNotEmpty()) currentMap[k] = v
+                    }
+                }
+            }
+        }
+        if (inProxyItem) buildFromMap(currentMap)
+        return out.toList()
+    }
+
+    /** Extracts Sing-Box / Xray JSON outbounds and legacy VMess JSON blobs into share URIs (pure Kotlin). */
+    fun extractJsonConfigs(rawText: String): List<String> {
+        if (!rawText.contains('{') || (!rawText.contains("\"server\"") && !rawText.contains("\"address\"") && !rawText.contains("\"add\""))) {
+            return emptyList()
+        }
+        val out = LinkedHashSet<String>()
+        val objRegex = Regex("""\{[^{}]{16,1200}\}""")
+        for (m in objRegex.findAll(rawText)) {
+            val obj = m.value
+            val add = extractJsonString(obj, "add")
+            if (add != null && (extractJsonString(obj, "id") != null || extractJsonString(obj, "v") != null)) {
+                val port = extractJsonPort(obj, "port")
+                if (port != null && add != "127.0.0.1" && add != "0.0.0.0") {
+                    val vmessUri = "vmess://${encodeBase64UrlSafe(obj)}"
+                    if (parse(vmessUri) != null) out.add(vmessUri)
+                    continue
+                }
+            }
+            val host = extractJsonString(obj, "server") ?: extractJsonString(obj, "address") ?: continue
+            val port = extractJsonPort(obj, "server_port") ?: extractJsonPort(obj, "port") ?: continue
+            if (host == "127.0.0.1" || host == "0.0.0.0") continue
+            val ctxStart = (m.range.first - 140).coerceAtLeast(0)
+            val ctxEnd = (m.range.last + 140).coerceAtMost(rawText.length)
+            val ctx = rawText.substring(ctxStart, ctxEnd).lowercase()
+            val objLower = obj.lowercase()
+            val scheme = when {
+                objLower.contains("\"wireguard\"") || objLower.contains("\"warp\"") || ctx.contains("\"wireguard\"") -> "wireguard"
+                objLower.contains("\"hysteria2\"") || ctx.contains("\"hysteria2\"") -> "hy2"
+                objLower.contains("\"vless\"") || ctx.contains("\"vless\"") -> "vless"
+                objLower.contains("\"trojan\"") || ctx.contains("\"trojan\"") -> "trojan"
+                objLower.contains("\"tuic\"") || ctx.contains("\"tuic\"") -> "tuic"
+                objLower.contains("\"shadowsocks\"") || ctx.contains("\"shadowsocks\"") -> "ss"
+                objLower.contains("\"socks\"") || ctx.contains("\"socks\"") -> "socks5"
+                objLower.contains("\"http\"") || ctx.contains("\"http\"") -> "http"
+                else -> "trojan"
+            }
+            val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+            val idOrPass = extractJsonString(obj, "id")
+                ?: extractJsonString(obj, "uuid")
+                ?: extractJsonString(obj, "password")
+                ?: "dastyab"
+            val tag = urlEncode(extractJsonString(obj, "tag") ?: extractJsonString(obj, "ps") ?: "JSON-$scheme")
+            val uri = when (scheme) {
+                "wireguard", "socks5", "http" -> "$scheme://$h:$port#$tag"
+                "ss" -> "ss://aes-256-gcm:${urlEncode(idOrPass)}@$h:$port#$tag"
+                else -> "$scheme://${urlEncode(idOrPass)}@$h:$port#$tag"
+            }
+            if (parse(uri) != null) out.add(uri)
         }
         return out.toList()
     }
@@ -388,7 +600,7 @@ object UniversalConfig {
         "openvpn", "ovpn" -> Family.OPENVPN
         "npv", "npv4", "npvs", "npvt", "napsternetv" -> Family.NAPSTERNETV
         "mtproto" -> Family.TELEGRAM_MTPROTO
-        "socks", "socks4", "socks5", "ssh", "sn", "dnstt", "slipnet" -> Family.PROXY_TUNNEL
+        "socks", "socks4", "socks5", "http", "ssh", "sn", "dnstt", "slipnet" -> Family.PROXY_TUNNEL
         else -> Family.XRAY_SINGBOX
     }
 
@@ -425,6 +637,8 @@ object UniversalConfig {
 
         val proto = protocolOf(trimmed)
         if (proto !in SUPPORTED_PROTOCOLS) return null
+
+        if (proto == "http" && isNonProxyHttpUrl(trimmed)) return null
 
         // VLESS
         if (proto == "vless") {
@@ -559,7 +773,7 @@ object UniversalConfig {
         "ss", "ssr" -> 7
         "npv4", "npvs", "npvt", "npv", "napsternetv" -> 8
         "juicity", "anytls", "naive+https", "naive+quic", "naive" -> 9
-        "socks5", "socks", "socks4", "ssh", "sn", "dnstt", "slipnet" -> 10
+        "socks5", "socks", "socks4", "http", "ssh", "sn", "dnstt", "slipnet" -> 10
         "mtproto" -> 11
         else -> 15
     }
@@ -568,7 +782,7 @@ object UniversalConfig {
      * Picks up to [limit] configs while preserving protocol diversity across all harvested sources
      * (prevents e.g. 120 VLESS links from crowding out harvested WireGuard, NapsternetV, or MTProto configs).
      */
-    fun mergeBalanced(configs: Collection<String>, limit: Int = 250): List<String> {
+    fun mergeBalanced(configs: Collection<String>, limit: Int = 4096): List<String> {
         if (configs.isEmpty()) return emptyList()
         val grouped = configs.distinct().groupBy { protocolOf(it) }
         val result = LinkedHashSet<String>()
@@ -872,13 +1086,94 @@ object UniversalConfig {
             .replace("<br>", "\n")
     }
 
+    /**
+     * PattNG-style Entry -> Exit Xray chain config JSON builder (pure Kotlin, supports WARP/WireGuard,
+     * SOCKS5, HTTP, VLESS, Trojan, Shadowsocks, Hysteria2 as Entry or Exit, plus TLS fragment & uTLS fingerprint).
+     */
+    fun buildXrayChainConfigJson(
+        entryUri: String?,
+        exitUri: String,
+        socksPort: Int = 10808,
+        fragment: String = "10-20,10-20,tlshello",
+        fingerprint: String = "chrome"
+    ): String {
+        val exitParsed = parse(exitUri)
+            ?: throw IllegalArgumentException("Unsupported exit URI: ${protocolOf(exitUri)}")
+        val entryParsed = entryUri?.takeIf { it.isNotBlank() }?.let { parse(it) }
+        val entryOutboundJson = entryParsed?.let { renderSingleOutboundJson("entry", it, null, fingerprint, fragment) }
+        val dialerTag = if (entryOutboundJson != null) "entry" else if (fragment.isNotBlank()) "fragment" else null
+        val exitOutboundJson = renderSingleOutboundJson("proxy", exitParsed, dialerTag, fingerprint, "")
+        val fragmentOutboundJson = """{"tag":"fragment","protocol":"freedom","settings":{"fragment":{"packets":"$fragment","length":"10-20","interval":"10-20"}}}"""
+        val outbounds = buildList {
+            add(exitOutboundJson)
+            if (entryOutboundJson != null) add(entryOutboundJson)
+            if (fragment.isNotBlank()) add(fragmentOutboundJson)
+            add("""{"tag":"direct","protocol":"freedom"}""")
+        }.joinToString(",")
+        return """{"log":{"loglevel":"warning"},"inbounds":[{"tag":"socks-in","port":$socksPort,"listen":"127.0.0.1","protocol":"socks","settings":{"udp":true}}],"outbounds":[$outbounds]}"""
+    }
+
+    private fun renderSingleOutboundJson(
+        tag: String,
+        ep: ParsedEndpoint,
+        dialerProxy: String?,
+        fingerprint: String,
+        fragmentTag: String
+    ): String {
+        val proto = ep.protocol.lowercase()
+        val host = ep.host.replace("\"", "")
+        val port = ep.port
+        val raw = ep.uri
+        val params = parseQueryParams(raw.substringAfter('?', "").substringBefore('#'))
+        val dialerJson = if (!dialerProxy.isNullOrBlank()) """"sockopt":{"dialerProxy":"$dialerProxy"}""" else if (fragmentTag.isNotBlank()) """"sockopt":{"dialerProxy":"fragment"}""" else ""
+        val userPart = raw.substringAfter("://", "").substringBefore('@').substringBefore('?').substringBefore('#')
+        val decodedUser = decodePercent(userPart).replace("\"", "")
+        return when (proto) {
+            "wireguard", "wg", "warp", "amneziawg" -> {
+                val priv = decodedUser.ifBlank { params["privatekey"].orEmpty() }.replace("\"", "")
+                val pub = (params["publickey"] ?: params["pk"] ?: "").replace("\"", "")
+                val sockopt = if (dialerJson.isNotEmpty()) ""","streamSettings":{$dialerJson}""" else ""
+                """{"tag":"$tag","protocol":"wireguard","settings":{"secretKey":"$priv","address":["172.16.0.2/32"],"peers":[{"publicKey":"$pub","endpoint":"$host:$port"}]}$sockopt}"""
+            }
+            "socks", "socks5", "socks4" -> {
+                val sockopt = if (dialerJson.isNotEmpty()) ""","streamSettings":{$dialerJson}""" else ""
+                """{"tag":"$tag","protocol":"socks","settings":{"servers":[{"address":"$host","port":$port}]}$sockopt}"""
+            }
+            "http" -> {
+                val sockopt = if (dialerJson.isNotEmpty()) ""","streamSettings":{$dialerJson}""" else ""
+                """{"tag":"$tag","protocol":"http","settings":{"servers":[{"address":"$host","port":$port}]}$sockopt}"""
+            }
+            "trojan" -> {
+                val sni = (params["sni"] ?: host).replace("\"", "")
+                val sockStr = if (dialerJson.isNotEmpty()) ",$dialerJson" else ""
+                """{"tag":"$tag","protocol":"trojan","settings":{"servers":[{"address":"$host","port":$port,"password":"$decodedUser"}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"serverName":"$sni","fingerprint":"$fingerprint"}$sockStr}}"""
+            }
+            "hy2", "hysteria2", "hysteria" -> {
+                val sni = (params["sni"] ?: host).replace("\"", "")
+                val sockStr = if (dialerJson.isNotEmpty()) ",$dialerJson" else ""
+                """{"tag":"$tag","protocol":"hysteria2","settings":{"servers":[{"address":"$host","port":$port,"password":"$decodedUser"}]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"serverName":"$sni","fingerprint":"$fingerprint"}$sockStr}}"""
+            }
+            "vless" -> {
+                val sni = (params["sni"] ?: params["host"] ?: host).replace("\"", "")
+                val sec = (params["security"] ?: "tls").replace("\"", "")
+                val net = (params["type"] ?: "ws").replace("\"", "")
+                val sockStr = if (dialerJson.isNotEmpty()) ",$dialerJson" else ""
+                """{"tag":"$tag","protocol":"vless","settings":{"vnext":[{"address":"$host","port":$port,"users":[{"id":"$decodedUser","encryption":"none"}]}]},"streamSettings":{"network":"$net","security":"$sec","tlsSettings":{"serverName":"$sni","fingerprint":"$fingerprint"}$sockStr}}"""
+            }
+            else -> {
+                val sockStr = if (dialerJson.isNotEmpty()) """"streamSettings":{$dialerJson},""" else ""
+                """{"tag":"$tag","protocol":"$proto",$sockStr"settings":{"servers":[{"address":"$host","port":$port}]}}"""
+            }
+        }
+    }
+
     private fun cleanUri(raw: String): String {
-        return raw.trim().trimEnd(',', ';', '.', ')', ']', '}')
+        return raw.trim().trimEnd(',', ';', '.', ')', ']', '}', '>', '\'', '"', '#')
     }
 
     private fun tryDecodeBase64(input: String): String? {
-        val compact = input.trim().replace("\r", "").replace("\n", "")
-        if (compact.length < 12 || compact.contains(' ')) return null
+        val compact = input.filter { !it.isWhitespace() }
+        if (compact.length < 12) return null
         return try {
             val bytes = decodeBase64Bytes(compact) ?: return null
             val text = String(bytes, Charsets.UTF_8)
@@ -886,6 +1181,24 @@ object UniversalConfig {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun encodeBase64UrlSafe(input: String): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        val bytes = input.toByteArray(Charsets.UTF_8)
+        val out = StringBuilder(((bytes.size + 2) / 3) * 4)
+        var i = 0
+        while (i < bytes.size) {
+            val b0 = bytes[i].toInt() and 0xFF
+            val b1 = if (i + 1 < bytes.size) bytes[i + 1].toInt() and 0xFF else 0
+            val b2 = if (i + 2 < bytes.size) bytes[i + 2].toInt() and 0xFF else 0
+            out.append(alphabet[b0 ushr 2])
+            out.append(alphabet[((b0 and 0x03) shl 4) or (b1 ushr 4)])
+            out.append(if (i + 1 < bytes.size) alphabet[((b1 and 0x0F) shl 2) or (b2 ushr 6)] else '=')
+            out.append(if (i + 2 < bytes.size) alphabet[b2 and 0x3F] else '=')
+            i += 3
+        }
+        return out.toString()
     }
 
     /** Pure-Kotlin RFC-4648 standard + URL-safe Base64 decoder (safe on API 24+ and plain JVM tests). */

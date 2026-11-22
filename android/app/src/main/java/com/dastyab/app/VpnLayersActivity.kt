@@ -419,7 +419,7 @@ class VpnLayersActivity : DastyabActivity() {
         progress.visibility = View.VISIBLE
         tvLayersLog.text = getString(R.string.layers_pool_testing)
         thread(isDaemon = true, name = "dastyab-pool-bench") {
-            val working = HarvestSourceStore.benchmarkHarvestedConfigs(pool, maxToTest = 25)
+            val working = HarvestSourceStore.benchmarkHarvestedConfigs(pool, maxToTest = 60)
             UiSafety.safePostUi(this, handler) {
                 progress.visibility = View.GONE
                 if (working.isEmpty()) {

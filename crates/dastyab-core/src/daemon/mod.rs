@@ -645,7 +645,9 @@ pub fn daemon_refresh_carriers(
                 worker_url,
                 strategy,
             );
-            log(&format!("carrier refresh: transport failure recorded for desync ladder (strategy {strategy:?})"));
+            log(&format!(
+                "carrier refresh: transport failure recorded for desync ladder (strategy {strategy:?})"
+            ));
         }
         _ => {}
     }
@@ -1598,7 +1600,9 @@ async fn run_self_maintenance(
                     ) {
                         Ok((added, dups)) => log(&log_line(
                             "INFO",
-                            &format!("autonomous v2rayN export: +{added} healthy (dup-skipped {dups}) → {target}"),
+                            &format!(
+                                "autonomous v2rayN export: +{added} healthy (dup-skipped {dups}) → {target}"
+                            ),
                         )),
                         Err(e) => log(&log_line(
                             "WARN",

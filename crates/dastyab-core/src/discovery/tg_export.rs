@@ -29,8 +29,8 @@
 //! messages including configs long gone from the public preview. That is
 //! exactly the "archived chats" reservoir the user pointed at.
 
-use crate::artifact::config_store::{import_single_link_source, SOURCE_TELEGRAM};
-use crate::discovery::harvest::extract_proxy_links;
+use crate::artifact::config_store::{import_links_bulk_source, SOURCE_TELEGRAM};
+use crate::discovery::harvest::VPN_CONFIG_FILE_EXTENSIONS;
 use std::path::{Path, PathBuf};
 
 /// A `.json`/`.html` archive file that was scanned, with its landed results.
@@ -143,46 +143,49 @@ pub fn extract_b64_embedded_links(body: &str) -> Vec<String> {
     out
 }
 
-/// Scan one file (`.json` or `.html`) for proxy links — both plaintext and
-/// whole-link base64 blobs — and import whatever is found into the profile's
-/// node store. Returns the per-file scan result.
+/// Return `true` when `path` uses any supported VPN config / export extension.
+fn is_supported_export_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    let lower = ext.to_ascii_lowercase();
+    lower == "html"
+        || lower == "htm"
+        || VPN_CONFIG_FILE_EXTENSIONS.iter().any(|e| *e == lower)
+}
+
+/// Scan one archive/config file (`.json`, `.html`, `.txt`, `.sub`, `.yaml`, `.ovpn`, etc.)
+/// for proxy links using full recursive decoding and import into the profile's node store.
 fn scan_file(profile: &str, path: &Path) -> FileScan {
     let mut scan = FileScan {
         path: path.display().to_string(),
         ..Default::default()
     };
-    if path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("json".to_string())
-        && path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("html".to_string())
-    {
+    if !is_supported_export_file(path) {
         return scan;
     }
-    let Ok(body) = std::fs::read_to_string(path) else {
+    let Ok(bytes) = std::fs::read(path) else {
         return scan;
     };
-
-    let mut links = extract_proxy_links(&body);
-    for l in extract_b64_embedded_links(&body) {
-        if !links.contains(&l) {
-            links.push(l);
-        }
-    }
+    let fname = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut links =
+        crate::tunnel::lion_warrior::extract_all_config_links_from_blob(&fname, &bytes);
     links.sort();
     links.dedup();
 
-    let mut added = 0usize;
-    for link in &links {
-        if let Ok(s) = import_single_link_source(profile, link, SOURCE_TELEGRAM) {
-            if s.added > 0 {
-                added += 1;
-            }
-        }
-    }
+    let added = import_links_bulk_source(profile, &links, SOURCE_TELEGRAM)
+        .map(|s| s.added)
+        .unwrap_or(0);
     scan.links_found = links.len();
     scan.links_added = added;
     scan
 }
 
-/// Recursively collect `.json`/`.html` files under `dir`.
+/// Recursively collect all supported archive and config files (`.json`, `.html`,
+/// `.txt`, `.sub`, `.yaml`, `.conf`, `.ovpn`, `.npvt`, etc.) under `dir`.
 fn collect_archive_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -191,11 +194,8 @@ fn collect_archive_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = entry.path();
         if p.is_dir() {
             collect_archive_files(&p, out);
-        } else if let Some(ext) = p.extension() {
-            let ext = ext.to_string_lossy().to_lowercase();
-            if ext == "json" || ext == "html" {
-                out.push(p);
-            }
+        } else if is_supported_export_file(&p) {
+            out.push(p);
         }
     }
 }
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn plaintext_links_still_extracted() {
         let body = "vless://06ef598c-1555-4887-b3f9-08214a2f6792@104.17.72.206:443?type=ws#";
-        let links = extract_proxy_links(body);
+        let links = crate::discovery::harvest::extract_proxy_links(body);
         assert_eq!(links.len(), 1);
     }
 
@@ -300,9 +300,10 @@ mod tests {
         let (profile, dir) = tmp_profile();
 
         // Fake export layout:
-        //   <dir>/chat1/messages.json        -> plaintext link + whole-link b64
+        //   <dir>/chat1/messages.json        -> plaintext link
         //   <dir>/chat2/messages.html        -> a second plaintext link
-        //   <dir>/notes.txt                  -> ignored (not json/html)
+        //   <dir>/notes.txt                  -> scanned, yields 0 links
+        //   <dir>/proxy_kafee_drop.txt       -> scanned, yields servers from .txt drop
         let chat1 = dir.join("chat1");
         let chat2 = dir.join("chat2");
         std::fs::create_dir_all(&chat1).unwrap();
@@ -318,14 +319,24 @@ mod tests {
         std::fs::write(chat2.join("messages.html"), html).unwrap();
 
         std::fs::write(dir.join("notes.txt"), "not a config file").unwrap();
+        let txt_drop = concat!(
+            "داخل فایل 619 عدد سرور از تمام کشورها هست\n",
+            "https://t.me/proxy_kafee/48582?single\n",
+            "hy2://tok@107.189.20.41:8443#hy2drop\n",
+            "warp://priv123=@engage.cloudflareclient.com:2408#warpentry\n",
+        );
+        std::fs::write(dir.join("proxy_kafee_drop.txt"), txt_drop).unwrap();
 
         let harvest = harvest_export_dir(&profile, &dir);
 
-        assert_eq!(harvest.files_scanned, 2, "json+html scanned, txt ignored");
-        assert_eq!(harvest.total_found, 3, "2 vless + 1 trojan");
+        assert_eq!(harvest.files_scanned, 4, "json, html, and .txt files scanned");
+        assert_eq!(
+            harvest.total_found, 5,
+            "2 vless + 1 trojan + 1 hy2 + 1 warp"
+        );
         assert!(
-            harvest.total_added >= 3,
-            "all three enter store: {:?}",
+            harvest.total_added >= 5,
+            "all five enter store: {:?}",
             harvest
         );
         assert!(harvest
@@ -336,8 +347,11 @@ mod tests {
             .files
             .iter()
             .any(|f| f.path.ends_with("messages.html")));
+        assert!(harvest
+            .files
+            .iter()
+            .any(|f| f.path.ends_with("proxy_kafee_drop.txt")));
 
-        // The store now contains them.
         let store = crate::artifact::config_store::load_node_store(&profile);
         let vless_count = store
             .nodes
@@ -349,8 +363,14 @@ mod tests {
             .iter()
             .filter(|n| n.url.starts_with("trojan://"))
             .count();
+        let warp_count = store
+            .nodes
+            .iter()
+            .filter(|n| n.url.starts_with("warp://"))
+            .count();
         assert_eq!(vless_count, 2);
         assert_eq!(trojan_count, 1);
+        assert_eq!(warp_count, 1);
 
         cleanup(&profile, &dir);
     }

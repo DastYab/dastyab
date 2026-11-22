@@ -1234,7 +1234,10 @@ fn cmd_bundle(profile: &str, action: crate::BundleAction) -> Result<(), CFError>
                             );
                         }
                         dastyab_core::cleanip::BundleDrift::MissingDir => {
-                            println!("Bundle drift: directory missing ({}). Next cycle will recreate it.", dir.display());
+                            println!(
+                                "Bundle drift: directory missing ({}). Next cycle will recreate it.",
+                                dir.display()
+                            );
                         }
                         dastyab_core::cleanip::BundleDrift::MissingFile { name } => {
                             println!(
@@ -1248,10 +1251,14 @@ fn cmd_bundle(profile: &str, action: crate::BundleAction) -> Result<(), CFError>
                             println!(
                                 "Bundle drift: active.vless points to {bundle_endpoint} but ledger says {ledger_endpoint}"
                             );
-                            println!("Next cycle will reconcile automatically, or run `dastyab bundle reconcile`.");
+                            println!(
+                                "Next cycle will reconcile automatically, or run `dastyab bundle reconcile`."
+                            );
                         }
                         dastyab_core::cleanip::BundleDrift::Unparseable { file, reason } => {
-                            println!("Bundle drift: {file} unparseable ({reason}). Next cycle will recreate it.");
+                            println!(
+                                "Bundle drift: {file} unparseable ({reason}). Next cycle will recreate it."
+                            );
                         }
                     }
                 }
@@ -2533,7 +2540,9 @@ fn backup(profile: String, action: BackupAction) -> Result<(), CFError> {
                 "  Backups dir: {}",
                 dastyab_core::backup::backup_dir().display()
             );
-            println!("  (daemon snapshots the profile on this schedule; run `daemon status` to see last backup)");
+            println!(
+                "  (daemon snapshots the profile on this schedule; run `daemon status` to see last backup)"
+            );
         }
     }
     Ok(())
@@ -2898,7 +2907,9 @@ async fn cmd_discover(
         ))
         .await?;
     if found.is_empty() {
-        println!("No clean IP found in this cycle. Try a larger --sample, --refresh, or re-deploy a worker.");
+        println!(
+            "No clean IP found in this cycle. Try a larger --sample, --refresh, or re-deploy a worker."
+        );
         return Ok(());
     }
     for ep in &found {
@@ -3051,7 +3062,9 @@ async fn cmd_autopilot(profile: &str, action: crate::AutopilotAction) -> Result<
                 println!("\n--- phase-2 WS-failure histogram (last scan) ---");
                 if let Some(diag) = dastyab_core::store::profiles::load_last_diagnostics(profile) {
                     if diag.ws_failure_histogram.is_empty() {
-                        println!("  (empty — no phase-2 probes recorded yet; run a discovery cycle first)");
+                        println!(
+                            "  (empty — no phase-2 probes recorded yet; run a discovery cycle first)"
+                        );
                     } else {
                         let mut rows: Vec<_> = diag.ws_failure_histogram.iter().collect();
                         rows.sort_by(|a, b| b.1.cmp(a.1));
@@ -3102,7 +3115,9 @@ async fn cmd_autopilot(profile: &str, action: crate::AutopilotAction) -> Result<
                                         low.join(", ")
                                     );
                                 } else if min_count > 0 {
-                                    println!("  Note: all profiles have success ≥ median; fingerprint spread looks healthy.");
+                                    println!(
+                                        "  Note: all profiles have success ≥ median; fingerprint spread looks healthy."
+                                    );
                                 }
                             }
                         }
@@ -3259,8 +3274,12 @@ async fn cmd_autopilot(profile: &str, action: crate::AutopilotAction) -> Result<
                 ..Default::default()
             };
             let interval = std::time::Duration::from_secs(interval_s.max(60));
-            println!("Autopilot ON (profile '{profile}'): discovery every {}s, {} candidates, {} workers.",
-                interval.as_secs(), params.sample, params.workers);
+            println!(
+                "Autopilot ON (profile '{profile}'): discovery every {}s, {} candidates, {} workers.",
+                interval.as_secs(),
+                params.sample,
+                params.workers
+            );
             println!("First cycle: discovering the best clean IP…");
             let engine = dastyab_core::autopilot::AutopilotEngine::new(profile, params, interval);
             engine
@@ -3274,7 +3293,9 @@ async fn cmd_autopilot(profile: &str, action: crate::AutopilotAction) -> Result<
             Ok(())
         }
         crate::AutopilotAction::Off => {
-            println!("Autopilot has no persistent loop in the CLI (it runs per-invocation). Use the GUI toggle for a background loop.");
+            println!(
+                "Autopilot has no persistent loop in the CLI (it runs per-invocation). Use the GUI toggle for a background loop."
+            );
             Ok(())
         }
     }
@@ -3841,14 +3862,18 @@ async fn cmd_daemon(profile: &str, action: DaemonAction) -> Result<(), CFError> 
                     return Err(CFError::new(
                         "Daemon",
                         "systemctl --user enable --now returned a non-zero status".to_string(),
-                        format!("The unit file is written; run it manually: systemctl --user enable --now {unit_name}"),
+                        format!(
+                            "The unit file is written; run it manually: systemctl --user enable --now {unit_name}"
+                        ),
                     ));
                 }
                 Err(e) => {
                     return Err(CFError::new(
                         "Daemon",
                         e.to_string(),
-                        format!("systemctl not available? Run manually: systemctl --user enable --now {unit_name}"),
+                        format!(
+                            "systemctl not available? Run manually: systemctl --user enable --now {unit_name}"
+                        ),
                     ));
                 }
             }
@@ -3863,7 +3888,9 @@ async fn cmd_daemon(profile: &str, action: DaemonAction) -> Result<(), CFError> 
                 None => "unknown (loginctl unavailable)".to_string(),
             };
             if linger {
-                println!("Boot autostart enabled (loginctl linger): daemon will start at boot, before login.");
+                println!(
+                    "Boot autostart enabled (loginctl linger): daemon will start at boot, before login."
+                );
             } else {
                 println!(
                     "Note: could not enable boot autostart (loginctl linger). Current state: {linger_state}. The daemon will still start at your next login."
@@ -5176,7 +5203,8 @@ async fn cmd_configs(
     depth: usize,
 ) -> Result<(), CFError> {
     use dastyab_core::config_store::{
-        import_single_link, import_v2rayn_store, load_node_store, render_nodes, save_node_store,
+        import_links_bulk_source, import_single_link, import_v2rayn_store, load_node_store,
+        render_nodes, save_node_store, SOURCE_MANUAL,
     };
 
     match action {
@@ -5184,20 +5212,43 @@ async fn cmd_configs(
             if path.is_empty() {
                 return Err(CFError::new(
                     "configs",
-                    "import requires --path to a v2rayN ServersStore.json.",
-                    "Example: dastyab configs import --path ~/.config/v2rayN/Local/ServersStore.json",
+                    "import requires --path to a config file (.txt, .sub, .yaml, .json, .ovpn, .npvt, .hc, ServersStore.json, etc.).",
+                    "Example: dastyab configs import --path ~/servers.txt",
                 ));
             }
-            if !std::path::Path::new(path).exists() {
+            let src_path = std::path::Path::new(path);
+            if !src_path.exists() {
                 return Err(CFError::new(
                     "configs",
                     format!("file not found: {path}"),
-                    "Check the path; v2rayN stores it under ~/.config/v2rayN/Local/.",
+                    "Check the path and retry.",
                 ));
             }
-            let s = import_v2rayn_store(profile, std::path::Path::new(path))?;
+            let bytes = std::fs::read(src_path).map_err(|e| {
+                CFError::new("configs", format!("failed reading {path}: {e}"), "")
+            })?;
+            let text_head = String::from_utf8_lossy(&bytes);
+            let is_v2rayn_store = src_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.eq_ignore_ascii_case("ServersStore.json"))
+                .unwrap_or(false)
+                || (src_path.extension().and_then(|e| e.to_str()) == Some("json")
+                    && text_head.contains("\"configType\"")
+                    && text_head.contains("\"address\""));
+            let s = if is_v2rayn_store {
+                import_v2rayn_store(profile, src_path)?
+            } else {
+                let fname = src_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("configs.txt");
+                let extracted =
+                    dastyab_core::lion_warrior::extract_all_config_links_from_blob(fname, &bytes);
+                import_links_bulk_source(profile, &extracted, SOURCE_MANUAL)?
+            };
             println!(
-                "[configs] imported from {path}: found={} added={} duplicates={} invalid={} non-vless={}",
+                "[configs] imported from {path}: found={} added={} duplicates={} invalid={} skipped={}",
                 s.found, s.added, s.duplicates, s.skipped_invalid, s.skipped_non_vless
             );
             println!("{}", render_nodes(profile));
@@ -5361,7 +5412,10 @@ async fn cmd_configs(
                     let store = load_node_store(profile);
                     match store.active() {
                         Some(a) if a.healthy == Some(true) => {
-                            println!("[configs] active node '{}' is healthy; no failover needed", a.id)
+                            println!(
+                                "[configs] active node '{}' is healthy; no failover needed",
+                                a.id
+                            )
                         }
                         _ => println!(
                             "[configs] no healthy node available to fail over to (run 'nodes probe' first)"
@@ -5616,7 +5670,9 @@ async fn cmd_dns_tunnel(profile: &str, action: crate::DnsTunnelAction) -> Result
                 println!("  ✓ {}", step.label());
             }
             if res.verified {
-                println!("DNS tunnel deployed and verified. It will be used automatically when DoH/DoT fail.");
+                println!(
+                    "DNS tunnel deployed and verified. It will be used automatically when DoH/DoT fail."
+                );
             } else {
                 println!(
                     "Deploy completed but the tunnel service did not report active. Check the VPS."
@@ -5771,7 +5827,9 @@ async fn cmd_dns_tunnel(profile: &str, action: crate::DnsTunnelAction) -> Result
                 st.sent, st.retransmitted, st.acked
             );
             if tr.is_idle() {
-                println!("[selftest] OK — all {chunks} chunks acknowledged and delivered in-order (total {delivered})");
+                println!(
+                    "[selftest] OK — all {chunks} chunks acknowledged and delivered in-order (total {delivered})"
+                );
                 Ok(())
             } else {
                 Err(CFError::new(
@@ -5903,9 +5961,13 @@ async fn cmd_dns_tunnel(profile: &str, action: crate::DnsTunnelAction) -> Result
                 println!("  ✓ {}", step.label());
             }
             if res.verified {
-                println!("DNS tunnel deployed and verified. It will be used automatically when DoH/DoT fail.");
+                println!(
+                    "DNS tunnel deployed and verified. It will be used automatically when DoH/DoT fail."
+                );
             } else {
-                println!("Deploy completed but the tunnel service did not report active. Check the VPS manually.");
+                println!(
+                    "Deploy completed but the tunnel service did not report active. Check the VPS manually."
+                );
             }
             Ok(())
         }
@@ -6100,18 +6162,23 @@ async fn cmd_multilayer(profile: &str, action: crate::MultilayerAction) -> Resul
                 vless_link: link.clone(),
                 country_hint: country,
             };
-            // Validate the link parses.
-            ml::parse_final_server(&cfg).map_err(|e| {
-                CFError::new(
+            // Validate any supported scheme (vless, vmess, trojan, ss, hy2, tuic, warp/wg, socks, http).
+            if dastyab_core::lion_warrior::parse_chain_hop(&link).is_err()
+                && ml::parse_final_server(&cfg).is_err()
+            {
+                return Err(CFError::new(
                     "multilayer",
-                    format!("invalid final server link: {}", e.brief()),
-                    "Provide a valid vless:// share link.",
-                )
-            })?;
+                    "invalid final server link",
+                    "Provide a valid vless://, vmess://, trojan://, ss://, hy2://, tuic://, or warp:// link.",
+                ));
+            }
             ml::save_final_server(profile, &cfg)?;
             println!("Final server saved for profile '{profile}':");
             println!("  name : {}", cfg.name);
             println!("  link : {}", cfg.vless_link);
+            println!(
+                "To chain through WARP/proxy entry: dastyab multilayer set-relays --links <warp://...> --fragment"
+            );
             println!("To test egress: dastyab multilayer probe-ai");
             Ok(())
         }
@@ -6344,7 +6411,9 @@ async fn cmd_autonomy(profile: &str, action: crate::AutonomyAction) -> Result<()
             dastyab_core::store::profiles::save_profile(&p)?;
 
             if applied.is_empty() {
-                println!("No config-only ACTION items to apply — you are already set or the remaining items need credentials (see below).");
+                println!(
+                    "No config-only ACTION items to apply — you are already set or the remaining items need credentials (see below)."
+                );
             } else {
                 println!("Applied {} config fix(es):", applied.len());
                 for f in &applied {
@@ -6372,7 +6441,9 @@ async fn cmd_autonomy(profile: &str, action: crate::AutonomyAction) -> Result<()
             }
             if report.needs_action() {
                 println!();
-                println!("Still not fully hands-off — remaining ACTION items need credentials or setup (see above).");
+                println!(
+                    "Still not fully hands-off — remaining ACTION items need credentials or setup (see above)."
+                );
                 std::process::exit(1);
             } else {
                 println!();

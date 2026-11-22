@@ -200,7 +200,8 @@ class DastyabVpnService : VpnService() {
         val endpointSummary = when {
             localHttpProxyPort != null -> "Proxy 127.0.0.1:$localHttpProxyPort + DoH"
             settings.mode == TunnelConfig.Mode.DNS_BLACKOUT -> "DoH ($dohLabel)"
-            else -> settings.parsedEndpoint()?.let { "${it.host}:${it.port} · DoH" } ?: "Encrypted DoH ($dohLabel)"
+            else -> settings.parsedAnyEndpoint()?.let { "${it.protocol.uppercase()} ${it.host}:${it.port} · DoH" }
+                ?: "Encrypted DoH ($dohLabel)"
         }
         val dnsSummary = "DoH + ${settings.dnsPrimary}"
 

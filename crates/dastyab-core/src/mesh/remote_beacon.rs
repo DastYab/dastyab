@@ -419,10 +419,14 @@ pub fn format_message(event: &BeaconEvent, lang: crate::probe::diagnose::Locale)
             format!("🔁 Token auto-rotated: {from} → {to} — protection resumed with no manual step")
         }
         (BeaconEvent::NetworkDown { survival }, crate::probe::diagnose::Locale::Fa) => {
-            format!("🌑 شبکه قطع شد ({survival}) — حفاظت صبر می‌کند و هنگام بازگشت شبکه به‌طور خودکار ادامه می‌یابد")
+            format!(
+                "🌑 شبکه قطع شد ({survival}) — حفاظت صبر می‌کند و هنگام بازگشت شبکه به‌طور خودکار ادامه می‌یابد"
+            )
         }
         (BeaconEvent::NetworkDown { survival }, _) => {
-            format!("🌑 Network down ({survival}) — protection holding; will auto-resume when the network returns")
+            format!(
+                "🌑 Network down ({survival}) — protection holding; will auto-resume when the network returns"
+            )
         }
         (BeaconEvent::NetworkRestored, crate::probe::diagnose::Locale::Fa) => {
             "✅ شبکه بازگشت — حفاظت خودکار از سر گرفته شد".to_string()

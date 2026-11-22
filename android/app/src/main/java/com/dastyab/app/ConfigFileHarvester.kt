@@ -32,17 +32,30 @@ object ConfigFileHarvester {
     const val VAULT_DIR_NAME = "vpn_vault"
     private const val PREFS_NAME = "dastyab_file_vault"
     private const val KEY_VAULT_JSON = "vault_entries_v1"
-    private const val MAX_FILE_BYTES = 2 * 1024 * 1024 // 2 MB cap per config file
-    private const val MAX_VAULT_ENTRIES = 160
+    private const val MAX_FILE_BYTES = 8 * 1024 * 1024 // 8 MB cap per config file
+    private const val MAX_VAULT_ENTRIES = 250
 
     val BINARY_OR_IMPORT_EXTENSIONS = setOf(
-        "ovpn", "openvpn", "npvs", "npv4", "npv", "npvt",
+        "ovpn", "openvpn", "ovpn2", "npvs", "npv4", "npv", "npvt",
         "hc", "ehi", "custom", "costum", "dark", "hat", "tls", "nm",
-        "sks", "sip", "inp", "conf", "wg", "sub"
+        "sks", "sip", "inp", "conf", "wg", "awg", "amneziawg", "warp",
+        "sbox", "singbox", "clash", "mihomo", "nekobox", "hiddify",
+        "xray", "v2ray", "prox", "rules", "tunnels", "vpn", "profile",
+        "sub", "b64", "base64"
     )
 
     val STRUCTURED_TEXT_EXTENSIONS = setOf(
-        "ovpn", "openvpn", "conf", "wg", "json", "yaml", "yml", "sub", "txt"
+        "ovpn", "openvpn", "ovpn2", "conf", "wg", "awg", "amneziawg", "warp",
+        "json", "jsonc", "yaml", "yml", "sub", "txt",
+        "list", "links", "urls", "nodes", "servers", "proxies",
+        "ini", "cfg", "sbox", "singbox", "clash", "mihomo", "nekobox",
+        "hiddify", "xray", "v2ray", "prox", "rules", "tunnels", "vpn",
+        "profile", "toml", "b64", "base64"
+    )
+
+    val NOISE_CONFIG_FILENAMES = setOf(
+        "robots.txt", "ads.txt", "humans.txt", "security.txt",
+        "license.txt", "changelog.txt", "readme.txt"
     )
 
     val ALL_CONFIG_EXTENSIONS = BINARY_OR_IMPORT_EXTENSIONS + STRUCTURED_TEXT_EXTENSIONS
@@ -121,13 +134,8 @@ object ConfigFileHarvester {
             val fileName = sanitizeFileName(pathPart.substringAfterLast('/', ""))
             val ext = fileName.substringAfterLast('.', "").lowercase()
             if (ext !in ALL_CONFIG_EXTENSIONS) return
-            // Skip plain `.txt` unless URL looks config/subscription related (prevents robots.txt noise)
-            if (ext == "txt") {
-                val lower = pathPart.lowercase()
-                val looksLikeConfigTxt = listOf("config", "sub", "vless", "vmess", "trojan", "vpn", "proxy", "wg", "ovpn")
-                    .any { lower.contains(it) }
-                if (!looksLikeConfigTxt) return
-            }
+            // Only skip standard site metadata `.txt` files (never drop Telegram/CDN server list `.txt` drops!)
+            if (ext == "txt" && fileName.lowercase() in NOISE_CONFIG_FILENAMES) return
             val key = clean.lowercase()
             if (!results.containsKey(key)) {
                 results[key] = DiscoveredFile(
@@ -198,83 +206,73 @@ object ConfigFileHarvester {
     }
 
     /**
-     * Parses textual downloaded VPN config files (`.ovpn`, `.conf`, `.json`, `.yaml`, `.sub`, `.txt`)
-     * to extract live routable endpoints so DastYab can benchmark latency and build VPN layers from them.
+     * Parses textual downloaded or local VPN config files (`.txt`, `.ovpn`, `.conf`, `.json`, `.yaml`, `.sub`, etc.)
+     * using [UniversalConfig.extractAll] (which handles 619+ node `.txt` drops, multi-round Base64, Clash YAML,
+     * Sing-Box/Xray/VMess JSON, WireGuard INI, OpenVPN, and explicit HTTP proxies while filtering web URLs).
      */
     fun extractEndpointsFromFileText(fileName: String, content: String): List<String> {
         if (content.isBlank()) return emptyList()
-        val ext = fileName.substringAfterLast('.', "").lowercase()
         val found = LinkedHashSet<String>()
+        found.addAll(UniversalConfig.extractAll(content, maxConfigs = 4096))
 
-        found.addAll(UniversalConfig.extractAll(content, maxConfigs = 80))
-
-        // Sing-box / Xray JSON or Clash YAML config files
-        if (ext in setOf("json", "yaml", "yml", "sub", "txt") &&
-            (content.contains("\"outbounds\"") || content.contains("\"server\"") || content.contains("proxies:"))
-        ) {
-            // Clash YAML `- {name: ..., type: vless/trojan/vmess/ss/hysteria2/wireguard, server: ..., port: ...}`
-            val clashLineRegex = Regex("""type:\s*(vless|vmess|trojan|ss|ssr|hy2|hysteria2|tuic|wireguard|socks5)""", RegexOption.IGNORE_CASE)
-            val yamlServer = Regex("""server:\s*["']?([^"'\s,}]+)["']?""")
-            val yamlPort = Regex("""port:\s*["']?(\d{1,5})["']?""")
-            if (clashLineRegex.containsMatchIn(content)) {
-                val types = clashLineRegex.findAll(content).map { it.groupValues[1].lowercase() }.toList()
-                val servers = yamlServer.findAll(content).map { it.groupValues[1] }.toList()
-                val ports = yamlPort.findAll(content).map { it.groupValues[1].toIntOrNull() }.toList()
-                val count = minOf(types.size, servers.size, ports.size, 30)
-                for (i in 0 until count) {
-                    val host = servers[i]
-                    val port = ports[i] ?: continue
-                    val t = types[i]
-                    if (port in 1..65535 && host.isNotBlank() && host != "127.0.0.1") {
-                        val uri = when (t) {
-                            "wireguard" -> "wireguard://$host:$port#ClashWG"
-                            "socks5" -> "socks5://$host:$port#ClashSocks"
-                            "hy2", "hysteria2" -> "hy2://dastyab@$host:$port#ClashHy2"
-                            "trojan" -> "trojan://dastyab@$host:$port#ClashTrojan"
-                            "tuic" -> "tuic://dastyab:token@$host:$port#ClashTuic"
-                            "ss" -> "ss://aes-256-gcm:dastyab@$host:$port#ClashSS"
-                            else -> null
-                        }
-                        if (uri != null && UniversalConfig.parse(uri) != null) found.add(uri)
-                    }
-                }
-            }
-
-            // Sing-box / Xray JSON `"server": "...", "server_port": ...` or `"address": "...", "port": ...`
-            val sbServerRegex = Regex(""""(?:server|address)"\s*:\s*"([^"]+)"\s*,\s*"(?:server_port|port)"\s*:\s*(\d{1,5})""")
-            sbServerRegex.findAll(content).take(30).forEach { m ->
-                val host = m.groupValues[1].trim()
-                val port = m.groupValues[2].toIntOrNull() ?: return@forEach
-                if (host.isNotBlank() && port in 1..65535 && host != "127.0.0.1" && host != "0.0.0.0") {
-                    val nearStart = (m.range.first - 140).coerceAtLeast(0)
-                    val ctxWindow = content.substring(nearStart, (m.range.last + 140).coerceAtMost(content.length)).lowercase()
-                    val scheme = when {
-                        ctxWindow.contains("\"wireguard\"") -> "wireguard"
-                        ctxWindow.contains("\"hysteria2\"") -> "hy2"
-                        ctxWindow.contains("\"trojan\"") -> "trojan"
-                        ctxWindow.contains("\"tuic\"") -> "tuic"
-                        ctxWindow.contains("\"shadowsocks\"") -> "ss"
-                        ctxWindow.contains("\"socks\"") -> "socks5"
-                        else -> "trojan"
-                    }
-                    val candidate = when (scheme) {
-                        "wireguard", "socks5" -> "$scheme://$host:$port#JSON-Node"
-                        "ss" -> "ss://aes-256-gcm:dastyab@$host:$port#JSON-SS"
-                        else -> "$scheme://dastyab@$host:$port#JSON-Node"
-                    }
-                    if (UniversalConfig.parse(candidate) != null) found.add(candidate)
+        // Also capture OpenVPN `http-proxy` / `socks-proxy` directives even if block lacks `client`
+        if (content.contains("http-proxy ", ignoreCase = true) || content.contains("socks-proxy ", ignoreCase = true)) {
+            for (rawLine in content.lineSequence()) {
+                val clean = rawLine.substringBefore('#').substringBefore(';').trim()
+                val parts = clean.split(Regex("\\s+"))
+                if (parts.size >= 3 && (parts[0].equals("http-proxy", true) || parts[0].equals("socks-proxy", true))) {
+                    val port = parts[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: continue
+                    val scheme = if (parts[0].equals("socks-proxy", true)) "socks5" else "http"
+                    val uri = "$scheme://${parts[1]}:$port"
+                    if (UniversalConfig.parse(uri) != null) found.add(uri)
                 }
             }
         }
-
         return found.toList()
     }
 
+    /** Decodes UTF-8 / UTF-16LE / UTF-16BE bytes and merges any printable ASCII runs from binary containers. */
+    fun decodeConfigBytes(bytes: ByteArray): String {
+        if (bytes.isEmpty()) return ""
+        val decoded = when {
+            bytes.size >= 3 && (bytes[0].toInt() and 0xFF) == 0xEF &&
+                (bytes[1].toInt() and 0xFF) == 0xBB && (bytes[2].toInt() and 0xFF) == 0xBF ->
+                String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+            bytes.size >= 2 && (bytes[0].toInt() and 0xFF) == 0xFF &&
+                (bytes[1].toInt() and 0xFF) == 0xFE ->
+                String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+            bytes.size >= 2 && (bytes[0].toInt() and 0xFF) == 0xFE &&
+                (bytes[1].toInt() and 0xFF) == 0xFF ->
+                String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+            else -> String(bytes, Charsets.UTF_8)
+        }
+        val printable = buildString {
+            val run = StringBuilder()
+            for (b in bytes) {
+                val u = b.toInt() and 0xFF
+                if (u in 32..126 || u == 9 || u == 10 || u == 13) {
+                    run.append(u.toChar())
+                } else {
+                    if (run.length >= 10) appendLine(run)
+                    run.clear()
+                }
+            }
+            if (run.length >= 10) appendLine(run)
+        }
+        return if (printable.length > decoded.length / 2) "$decoded\n$printable" else decoded
+    }
+
+    /** Convenience helper: extracts all config links straight from raw file bytes of any extension. */
+    fun extractEndpointsFromFileBytes(fileName: String, bytes: ByteArray): List<String> {
+        if (bytes.isEmpty()) return emptyList()
+        return extractEndpointsFromFileText(fileName, decodeConfigBytes(bytes))
+    }
+
     /**
-     * Reads downloaded/imported `.npv*` / `.ovpn` / `.conf` / `.wg` / `.hc` / `.json` / `.yaml` /
+     * Reads downloaded/imported `.txt` / `.npv*` / `.ovpn` / `.conf` / `.wg` / `.hc` / `.json` / `.yaml` /
      * `.sub` vault files on disk and extracts all chainable proxy hops for Lion & Warrior layering.
      */
-    fun extractVaultHops(context: Context, maxFiles: Int = 24): List<TunnelConfig.ProxyHop> {
+    fun extractVaultHops(context: Context, maxFiles: Int = 40): List<TunnelConfig.ProxyHop> {
         val entries = loadVault(context)
         if (entries.isEmpty()) return emptyList()
         val uris = LinkedHashSet<String>()
@@ -287,37 +285,9 @@ object ConfigFileHarvester {
             if (!f.isFile || f.length() <= 0L || f.length() > MAX_FILE_BYTES) continue
             filesRead++
             val bytes = runCatching { f.readBytes() }.getOrNull() ?: continue
-            val utf8 = String(bytes, Charsets.UTF_8)
-            val printable = buildString {
-                val run = StringBuilder()
-                for (b in bytes) {
-                    val u = b.toInt() and 0xFF
-                    if (u in 32..126 || u == 9 || u == 10 || u == 13) {
-                        run.append(u.toChar())
-                    } else {
-                        if (run.length >= 10) appendLine(run)
-                        run.clear()
-                    }
-                }
-                if (run.length >= 10) appendLine(run)
-            }
-            val corpus = if (printable.length > utf8.length / 2) "$utf8\n$printable" else utf8
-            uris.addAll(extractEndpointsFromFileText(entry.fileName, corpus))
-
-            // Explicit OpenVPN http-proxy / socks-proxy upstream relays
-            if (entry.extension in setOf("ovpn", "openvpn") || corpus.contains("http-proxy ")) {
-                for (rawLine in corpus.lineSequence()) {
-                    val clean = rawLine.substringBefore('#').substringBefore(';').trim()
-                    val parts = clean.split(Regex("\\s+"))
-                    if (parts.size >= 3 && (parts[0].equals("http-proxy", true) || parts[0].equals("socks-proxy", true))) {
-                        val port = parts[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: continue
-                        val scheme = if (parts[0].equals("socks-proxy", true)) "socks5" else "http"
-                        uris.add("$scheme://${parts[1]}:$port")
-                    }
-                }
-            }
+            uris.addAll(extractEndpointsFromFileBytes(entry.fileName, bytes))
         }
-        return UniversalConfig.extractChainableProxyHops(uris.toList(), limit = 180)
+        return UniversalConfig.extractChainableProxyHops(uris.toList(), limit = 512)
     }
 
     fun mimeTypeForExtension(ext: String): String = when (ext.lowercase()) {
@@ -426,12 +396,7 @@ object ConfigFileHarvester {
             return null to emptyList()
         }
 
-        val extracted = if (ext in STRUCTURED_TEXT_EXTENSIONS) {
-            val text = String(bytes, Charsets.UTF_8)
-            extractEndpointsFromFileText(safeName, text)
-        } else {
-            emptyList()
-        }
+        val extracted = extractEndpointsFromFileBytes(safeName, bytes)
 
         val vaultDir = File(context.filesDir, VAULT_DIR_NAME).apply { mkdirs() }
         val uniqueFile = File(vaultDir, makeUniqueName(vaultDir, safeName))
@@ -458,18 +423,14 @@ object ConfigFileHarvester {
         val resolver = context.contentResolver
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
-        } ?: uri.lastPathSegment?.substringAfterLast('/') ?: "imported.ovpn"
+        } ?: uri.lastPathSegment?.substringAfterLast('/') ?: "imported.txt"
 
         val safeName = sanitizeFileName(displayName)
         val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return null to emptyList()
         if (bytes.isEmpty() || bytes.size > MAX_FILE_BYTES) return null to emptyList()
 
         val ext = safeName.substringAfterLast('.', "").lowercase()
-        val extracted = if (ext in STRUCTURED_TEXT_EXTENSIONS || isMostlyText(bytes)) {
-            extractEndpointsFromFileText(safeName, String(bytes, Charsets.UTF_8))
-        } else {
-            emptyList()
-        }
+        val extracted = extractEndpointsFromFileBytes(safeName, bytes)
 
         val vaultDir = File(context.filesDir, VAULT_DIR_NAME).apply { mkdirs() }
         val uniqueFile = File(vaultDir, makeUniqueName(vaultDir, safeName))

@@ -339,4 +339,41 @@ class UniversalConfigTest {
         val capped = UniversalConfig.extractChainableProxyHops(configs, limit = 2)
         assertEquals(2, capped.size)
     }
+
+    @Test
+    fun extractAll_handles619ServerPersianTelegramTxtDropAndExcludesWebUrls() {
+        val sb = StringBuilder()
+        sb.appendLine("داخل فایل 619 عدد سرور از تمام کشورها هست ری اکشن فراموش نکنید")
+        sb.appendLine("مخابرات و تمام اپراتورها")
+        sb.appendLine("بااین برنامه اجرا کنید PattNG (https://t.me/proxy_kafee/48582?single)👉👉 کیلیک کنید")
+        sb.appendLine("#ویتوری #v2box #pattNG")
+        sb.appendLine("@proxy_kafee")
+        sb.appendLine("🔗لینک دانلود نسخه جدید https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50")
+        sb.appendLine("🔺آموزش fragment+fingerprint (https://t.me/proxy_kafee/46097)")
+        for (i in 1..619) {
+            when (i % 5) {
+                0 -> sb.appendLine("warp://privKey$i@162.159.192.${(i % 250) + 1}:2408?publickey=pubKey$i#WARP-$i")
+                1 -> sb.appendLine("hy2://pass$i@hy$i.example.com:8443?sni=hy$i.example.com#Hy2-$i")
+                2 -> sb.appendLine("trojan://secret$i@tr$i.example.com:443?sni=tr$i.example.com#Trojan-$i")
+                3 -> sb.appendLine("socks5://user$i:pass$i@198.51.100.${(i % 250) + 1}:1080#Socks-$i")
+                else -> sb.appendLine("vless://11111111-2222-3333-4444-${String.format("%012d", i)}@edge$i.example.com:443?security=tls&type=ws#Vless-$i")
+            }
+        }
+        val extracted = UniversalConfig.extractAll(sb.toString())
+        assertEquals(619, extracted.size)
+        assertTrue(extracted.none { it.contains("proxy_kafee") || it.contains("github.com") })
+        assertTrue(UniversalConfig.isNonProxyHttpUrl("https://t.me/proxy_kafee/48582?single"))
+        assertTrue(UniversalConfig.isNonProxyHttpUrl("https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50"))
+    }
+
+    @Test
+    fun buildXrayChainConfigJson_chainsWarpEntryIntoExitOutboundWithFragmentAndFingerprint() {
+        val warpEntry = "warp://privKey123@162.159.192.1:2408?publickey=pubKey123#WARP"
+        val exitVless = "vless://11111111-2222-3333-4444-555555555555@exit.example.com:443?security=tls&type=ws&sni=exit.example.com#Exit"
+        val json = UniversalConfig.buildXrayChainConfigJson(warpEntry, exitVless, socksPort = 10808)
+        assertTrue(json.contains("\"protocol\":\"wireguard\""))
+        assertTrue(json.contains("\"dialerProxy\":\"entry\""))
+        assertTrue(json.contains("\"fingerprint\":\"chrome\""))
+        assertTrue(json.contains("\"fragment\""))
+    }
 }

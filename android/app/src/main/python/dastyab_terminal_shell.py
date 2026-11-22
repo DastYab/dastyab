@@ -88,7 +88,7 @@ def init_env(home_dir, tmp_dir, native_lib_dir="", extra_env=None):
 
 
 def sync_nodes(vless_uris_json, route_info_json="{}"):
-    """Sync Android harvested VLESS URIs and route state into `~/.dastyab/profiles/default/`."""
+    """Sync Android harvested proxy/VPN URIs and route state into `~/.dastyab/profiles/default/`."""
     prof = _shim.profile_dir()
     try:
         uris = json.loads(vless_uris_json) if isinstance(vless_uris_json, str) else list(vless_uris_json)
@@ -98,7 +98,7 @@ def sync_nodes(vless_uris_json, route_info_json="{}"):
         uris = []
 
     nodes = []
-    parsed_vless = []
+    parsed_nodes = []
     seen = set()
     for u in uris:
         if not isinstance(u, str):
@@ -108,9 +108,9 @@ def sync_nodes(vless_uris_json, route_info_json="{}"):
             continue
         seen.add(u)
         nodes.append({"url": u, "healthy": True, "source": "android-harvest"})
-        pv = dastyab_aistudio.parse_vless(u)
-        if pv:
-            parsed_vless.append(pv)
+        pn = dastyab_aistudio.parse_node_uri(u)
+        if pn:
+            parsed_nodes.append(pn)
 
     nodes_path = os.path.join(prof, "nodes.json")
     tmp = nodes_path + ".tmp"
@@ -120,10 +120,10 @@ def sync_nodes(vless_uris_json, route_info_json="{}"):
 
     # Populate fresh_vless.json if empty so `dastyab aistudio` works out of the box
     aistudio_pool = os.path.join(prof, "fresh_vless.json")
-    if parsed_vless and (not os.path.isfile(aistudio_pool) or os.path.getsize(aistudio_pool) < 5):
+    if parsed_nodes and (not os.path.isfile(aistudio_pool) or os.path.getsize(aistudio_pool) < 5):
         tmp2 = aistudio_pool + ".tmp"
         with open(tmp2, "w") as fh:
-            json.dump(parsed_vless[:12], fh, indent=1)
+            json.dump(parsed_nodes[:64], fh, indent=1)
         os.replace(tmp2, aistudio_pool)
 
     # Also write raw uris.txt for quick inspection or `build-pool uris.txt`
@@ -613,13 +613,17 @@ def _print_help():
         f"DastYab Terminal Mode — Embedded CPython {platform.python_version()} (Linux-Compatible Core)\n"
         "\n"
         "Google Flow & AI Studio (exact Linux Python algorithms):\n"
-        "  dastyab flow best [--try N] [--country XX]  Scan routes + benchmark VLESS pool\n"
-        "  dastyab flow start [idx] [--country XX]     Verify gates + open Flow in browser\n"
-        "  dastyab flow status                         Live egress IP, geo & gate check\n"
-        "  dastyab flow verify                         Re-probe saved routes\n"
-        "  dastyab flow countries                      List all 151 Google Flow countries\n"
-        "  dastyab aistudio verify                     Check AI Studio routes + pool\n"
-        "  dastyab aistudio start                      Start AI Studio tunnel + browser\n"
+        "  dastyab flow best [--try N] [--country XX]     Scan routes + benchmark pool\n"
+        "  dastyab flow ingest <file> [--entry URI|FILE]  Import ALL configs from .txt/any ext\n"
+        "  dastyab flow build-pool <file> [--entry ...]   Build verified pool from .txt/config\n"
+        "  dastyab flow start [idx] [--country XX]        Verify gates + open Flow in browser\n"
+        "  dastyab flow status                            Live egress IP, geo & gate check\n"
+        "  dastyab flow verify                            Re-probe saved routes\n"
+        "  dastyab flow countries                         List all 151 Google Flow countries\n"
+        "  dastyab aistudio ingest <file> [--entry ...]   Import ALL configs from .txt/any ext\n"
+        "  dastyab aistudio build-pool <file> [--entry]   Build verified AI Studio pool\n"
+        "  dastyab aistudio verify                        Check AI Studio routes + pool\n"
+        "  dastyab aistudio start                         Start AI Studio tunnel + browser\n"
         "\n"
         "Python Package Manager (pip -> ~/.dastyab/site-packages):\n"
         "  pip list                                    List bundled & user-installed packages\n"

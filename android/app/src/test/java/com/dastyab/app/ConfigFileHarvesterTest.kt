@@ -107,4 +107,43 @@ class ConfigFileHarvesterTest {
         assertEquals("@whitedns", restored[0].sourceLabel)
         assertEquals(2048L, restored[0].sizeBytes)
     }
+
+    @Test
+    fun extractChannelFiles_acceptsArbitraryTxtAndRejectsNoiseTxt() {
+        val html = """
+            <a href="https://cdn.example.com/drops/all_619_servers.txt">Drop</a>
+            <a href="https://cdn.example.com/robots.txt">Robots</a>
+            <a href="https://cdn.example.com/README.txt">Readme</a>
+            <a href="https://cdn.example.com/wg.awg">AWG</a>
+            <a href="https://cdn.example.com/nodes.sbox">SBOX</a>
+        """.trimIndent()
+        val found = ConfigFileHarvester.extractChannelFiles(html, "@proxy_kafee")
+        val names = found.map { it.fileName }.toSet()
+        assertTrue("all_619_servers.txt" in names)
+        assertTrue("wg.awg" in names)
+        assertTrue("nodes.sbox" in names)
+        assertTrue("robots.txt" !in names)
+        assertTrue("README.txt" !in names)
+    }
+
+    @Test
+    fun extractEndpointsFromFileBytes_handlesUtf16AndBlockYamlAndBinaryPrintable() {
+        val text = """
+            proxies:
+              - name: "MultiLine-Hy2"
+                type: hysteria2
+                server: ml-hy2.example.com
+                port: 8443
+                password: secret
+        """.trimIndent()
+        val utf16Bytes = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + text.toByteArray(Charsets.UTF_16LE)
+        val extracted = ConfigFileHarvester.extractEndpointsFromFileBytes("drop.txt", utf16Bytes)
+        assertTrue(extracted.any { it.contains("ml-hy2.example.com:8443") })
+
+        val binPayload = byteArrayOf(0x00, 0x01, 0x7F.toByte()) +
+            "trojan://pass123@bin-tr.example.com:443#BinTrojan".toByteArray(Charsets.UTF_8) +
+            byteArrayOf(0x00, 0x02)
+        val binExtracted = ConfigFileHarvester.extractEndpointsFromFileBytes("packed.npvt", binPayload)
+        assertTrue(binExtracted.any { it.contains("bin-tr.example.com:443") })
+    }
 }

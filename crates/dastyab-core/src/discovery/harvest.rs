@@ -167,10 +167,17 @@ fn extract_message_ids(body: &str) -> Vec<i64> {
     ids
 }
 
+fn trim_trailing_link_punct(raw: &str) -> &str {
+    // Strip trailing wrapper punctuation without trimming valid `=` base64 padding
+    // or `#fragment` labels unless `#` is literally dangling at the very end.
+    raw.trim_end_matches(|c: char| matches!(c, ')' | '(' | ']' | '[' | ',' | ';'))
+        .trim_end_matches('#')
+}
+
 /// Extract and HTML-decode every supported proxy share-link from a preview
 /// body — Xray/Sing-box URIs, WireGuard/WARP/AmneziaWG URIs & INI blocks,
-/// NapsternetV (`npv://`, `npv4://`), SOCKS/SSH/SlipNet, and Telegram MTProto.
-/// Handles `&amp;` → `&` so links are importable.
+/// NapsternetV (`npv://`, `npv4://`), explicit HTTP proxies, SOCKS/SSH/SlipNet,
+/// and Telegram MTProto. Handles `&amp;` -> `&` so links are importable.
 pub fn extract_proxy_links(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -180,7 +187,12 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
         }
     };
 
-    for scheme in crate::net::proxy_uri::SUPPORTED_SCHEMES {
+    let schemes = crate::net::proxy_uri::SUPPORTED_SCHEMES
+        .iter()
+        .copied()
+        .chain(std::iter::once("http"));
+
+    for scheme in schemes {
         let marker = format!("{scheme}://");
         for (pos, _) in body.match_indices(marker.as_str()) {
             if pos > 0 {
@@ -195,14 +207,14 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
             if token.is_empty() {
                 continue;
             }
-            // A link ends at whitespace, `"`, `<`, or `>`.
+            // A link ends at whitespace, quote, angle bracket, or single quote.
             let end = token
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '<' || c == '>')
+                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
                 .unwrap_or(token.len());
-            let tail = token[..end].trim_end_matches('#');
+            let tail = trim_trailing_link_punct(&token[..end]);
             if !tail.contains('@')
                 && !matches!(
-                    *scheme,
+                    scheme,
                     "vmess"
                         | "ssr"
                         | "npv"
@@ -217,6 +229,7 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
                         | "socks5"
                         | "socks4"
                         | "socks"
+                        | "http"
                         | "sn"
                         | "dnstt"
                         | "slipnet"
@@ -226,6 +239,9 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
             }
             let decoded = tail.replace("&amp;", "&");
             let link = format!("{scheme}://{decoded}");
+            if scheme == "http" && crate::net::proxy_uri::is_non_proxy_http_url(&link) {
+                continue;
+            }
             if crate::net::proxy_uri::ProxyUri::parse(&link).is_some() {
                 push_unique(link);
             }
@@ -251,20 +267,42 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
     out
 }
 
-/// Supported VPN config file extensions for channel / GitHub file harvesting.
+/// Supported VPN config file extensions for channel / GitHub / local harvesting.
 #[rustfmt::skip]
 pub const VPN_CONFIG_FILE_EXTENSIONS: &[&str] = &[
-    "ovpn", "openvpn", "npvs", "npv4", "npv", "npvt", "hc", "ehi", "custom", "costum",
-    "dark", "hat", "tls", "nm", "conf", "wg", "sks", "sip", "inp", "json", "yaml", "yml",
-    "sub",
+    "txt", "list", "links", "urls", "nodes", "servers", "proxies", "ini", "cfg",
+    "ovpn", "ovpn2", "openvpn", "npvs", "npv4", "npv", "npvt", "hc", "ehi",
+    "custom", "costum", "dark", "hat", "tls", "nm", "conf", "wg", "awg",
+    "amneziawg", "warp", "sbox", "singbox", "clash", "mihomo", "nekobox",
+    "hiddify", "xray", "v2ray", "sks", "sip", "inp", "prox", "rules",
+    "tunnels", "vpn", "profile", "json", "jsonc", "yaml", "yml", "toml",
+    "sub", "base64", "b64",
 ];
 
 fn is_config_url_delim(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']')
 }
 
-/// Extract direct downloadable VPN config file URLs (`.ovpn`, `.openvpn`, `.npvs`, `.hc`, `.custom`, etc.)
-/// from Telegram HTML previews or plain text feeds.
+fn is_noise_config_filename(path_no_query: &str) -> bool {
+    let file_name = path_no_query
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        file_name.as_str(),
+        "robots.txt"
+            | "ads.txt"
+            | "humans.txt"
+            | "security.txt"
+            | "license.txt"
+            | "changelog.txt"
+            | "readme.txt"
+    )
+}
+
+/// Extract direct downloadable VPN config file URLs (`.txt`, `.ovpn`, `.npvt`,
+/// `.hc`, `.custom`, `.yaml`, `.json`, etc.) from Telegram HTML or plain feeds.
 pub fn extract_config_file_urls(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -274,6 +312,9 @@ pub fn extract_config_file_urls(body: &str) -> Vec<String> {
             let end = slice.find(is_config_url_delim).unwrap_or(slice.len());
             let candidate = slice[..end].replace("&amp;", "&");
             let path_no_query = candidate.split(['?', '#']).next().unwrap_or(&candidate);
+            if is_noise_config_filename(path_no_query) {
+                continue;
+            }
             let lower = path_no_query.to_ascii_lowercase();
             let has_ext = VPN_CONFIG_FILE_EXTENSIONS
                 .iter()
@@ -964,9 +1005,13 @@ pub async fn run_multi_hop_discovery(
     })
 }
 
+const MAX_ATTACHMENT_FILES_PER_CHANNEL: usize = 8;
+const MAX_ATTACHMENT_FILE_BYTES: usize = 4 * 1024 * 1024;
+
 /// Harvest a channel into a profile's config store using a shared client.
 /// `depth` = how many preview pages to walk back into the channel's archive
-/// (1 = latest page only). Returns how many links were found and imported.
+/// (1 = latest page only). Downloads linked config files (`.txt`, `.ovpn`,
+/// `.npvt`, `.hc`, `.yaml`, `.json`, etc.) as well as inline message links.
 pub async fn harvest_channel_async_depth(
     client: &reqwest::Client,
     profile: &str,
@@ -980,11 +1025,20 @@ pub async fn harvest_channel_async_depth(
     };
     let depth = depth.clamp(1, MAX_ARCHIVE_DEPTH);
     let mut cursor: Option<i64> = None;
+    let mut attachment_urls: Vec<String> = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
     for _ in 0..depth {
         match fetch_preview_page(client, &chan, cursor).await {
             Ok(page) => {
                 harvest.links.extend(page.links);
                 harvest.posts.extend(page.posts);
+                for file_url in extract_config_file_urls(&page.body) {
+                    if attachment_urls.len() < MAX_ATTACHMENT_FILES_PER_CHANNEL
+                        && seen_urls.insert(file_url.clone())
+                    {
+                        attachment_urls.push(file_url);
+                    }
+                }
                 let min = page.ids.iter().min().copied();
                 if min != cursor && min.is_some() {
                     cursor = min;
@@ -999,33 +1053,52 @@ pub async fn harvest_channel_async_depth(
         }
     }
 
-    // Import everything collected; the store dedups across schemes and pages.
-    let posts = std::mem::take(&mut harvest.posts);
-    for (link, published_epoch) in &posts {
-        let epoch = if *published_epoch > 0.0 {
-            Some(*published_epoch)
-        } else {
-            None
+    // Download & extract any config files (`.txt`, `.sub`, `.yaml`, `.ovpn`, ...).
+    let mut extra_links: Vec<String> = Vec::new();
+    for file_url in attachment_urls {
+        let Ok(resp) = client.get(&file_url).send().await else {
+            continue;
         };
-        match crate::artifact::config_store::import_single_link_source_ts(
-            profile,
-            link,
-            crate::artifact::config_store::SOURCE_TELEGRAM,
-            epoch,
-        ) {
-            Ok(s) => {
-                harvest.summary.found += s.found;
-                harvest.summary.added += s.added;
-                harvest.summary.duplicates += s.duplicates;
-                harvest.summary.skipped_invalid += s.skipped_invalid;
-                harvest.summary.skipped_non_vless += s.skipped_non_vless;
-            }
-            Err(_) => {
-                harvest.summary.skipped_invalid += 1;
-            }
+        if resp.status().as_u16() != 200 {
+            continue;
         }
+        let Ok(bytes) = resp.bytes().await else {
+            continue;
+        };
+        if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT_FILE_BYTES {
+            continue;
+        }
+        let fname = file_url
+            .split(['?', '#'])
+            .next()
+            .and_then(|u| u.rsplit('/').next())
+            .unwrap_or("attachment.txt");
+        let extracted =
+            crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes);
+        extra_links.extend(extracted);
     }
-    harvest.posts = posts;
+
+    // Batch-import direct posts + attachment-extracted links cleanly.
+    let mut all_posts: Vec<(String, Option<f64>)> = harvest
+        .posts
+        .iter()
+        .map(|(l, ts)| (l.clone(), if *ts > 0.0 { Some(*ts) } else { None }))
+        .collect();
+    for link in extra_links {
+        if !harvest.links.contains(&link) {
+            harvest.links.push(link.clone());
+        }
+        all_posts.push((link, None));
+    }
+
+    match crate::artifact::config_store::import_links_bulk_source_ts(
+        profile,
+        &all_posts,
+        crate::artifact::config_store::SOURCE_TELEGRAM,
+    ) {
+        Ok(s) => harvest.summary = s,
+        Err(_) => harvest.summary.skipped_invalid += all_posts.len(),
+    }
     harvest
 }
 
@@ -1193,7 +1266,9 @@ mod tests {
             "https://cdn.example.com/vpn/iran_tcp.ovpn ",
             "https://cdn.example.com/vpn/fast.npvs ",
             "https://cdn.example.com/vpn/mobile.hc ",
-            "https://cdn.example.com/vpn/bypass.custom",
+            "https://cdn.example.com/vpn/bypass.custom ",
+            "https://cdn.example.com/vpn/619_servers.txt ",
+            "https://cdn.example.com/robots.txt",
             "</div>"
         );
         let links = extract_proxy_links(html);
@@ -1201,11 +1276,28 @@ mod tests {
         assert!(links.iter().any(|l| l.starts_with(ovpn)));
 
         let file_urls = extract_config_file_urls(html);
-        assert_eq!(file_urls.len(), 4);
+        assert_eq!(file_urls.len(), 5);
         assert!(file_urls.iter().any(|u| u.ends_with(".ovpn")));
         assert!(file_urls.iter().any(|u| u.ends_with(".npvs")));
         assert!(file_urls.iter().any(|u| u.ends_with(".hc")));
         assert!(file_urls.iter().any(|u| u.ends_with(".custom")));
+        assert!(file_urls.iter().any(|u| u.ends_with(".txt")));
+        assert!(!file_urls.iter().any(|u| u.ends_with("robots.txt")));
+    }
+
+    #[test]
+    fn extract_ignores_telegram_and_github_web_urls_with_persian_prose() {
+        let body = concat!(
+            "داخل فایل 619 عدد سرور از تمام کشورها هست\n",
+            "بااین برنامه اجرا کنید PattNG (https://t.me/proxy_kafee/48582?single)\n",
+            "https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50\n",
+            "vless://11111111-1111-1111-1111-111111111111@1.2.3.4:443?type=ws#ok\n",
+            "http://user:pass@9.9.9.9:8080#explicit-http\n",
+        );
+        let links = extract_proxy_links(body);
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().any(|l| l.starts_with("vless://")));
+        assert!(links.iter().any(|l| l.starts_with("http://user:pass@9.9.9.9:8080")));
     }
 
     #[test]

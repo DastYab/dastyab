@@ -396,7 +396,7 @@ object ConfigHarvester {
      * (VLESS/VMess/Trojan/SS/SSR/Hy2/TUIC/WireGuard/WARP/NapsternetV/MTProto/SOCKS/SSH/SlipNet),
      * parses WireGuard `[Interface]...[Peer]` INI blocks, and decodes nested Base64 blobs.
      */
-    fun extractProxyConfigs(rawPayload: String, maxConfigs: Int = 250): List<String> {
+    fun extractProxyConfigs(rawPayload: String, maxConfigs: Int = 4096): List<String> {
         return UniversalConfig.extractAll(rawPayload, maxConfigs)
     }
 
@@ -484,14 +484,13 @@ object ConfigHarvester {
         for (feed in githubFeeds) {
             val body = httpGet(feed.primaryUrl, timeoutMs = 5500)
             if (body != null) {
-                val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(context, body, feed.name, maxDownloadsPerSource = 4)
+                val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(context, body, feed.name, maxDownloadsPerSource = 8)
                 downloadedFilesCount += files.count { it.isDownloadedLocally }
-                val extracted = (extractProxyConfigs(body, maxConfigs = 40) + fileUris).distinct()
+                val extracted = (extractProxyConfigs(body, maxConfigs = 4096) + fileUris).distinct()
                 if (extracted.isNotEmpty() || files.isNotEmpty()) {
                     allConfigs.addAll(extracted)
                     githubCount += extracted.size
                     logStep("  ✓ GitHub direct [${feed.name}]: +${extracted.size} configs, ${files.size} files")
-                    if (githubCount >= 60) break
                     continue
                 }
             }
@@ -500,15 +499,14 @@ object ConfigHarvester {
             if (mirror != null) {
                 val mirrorBody = httpGet(mirror, timeoutMs = 5500)
                 if (mirrorBody != null) {
-                    val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(context, mirrorBody, feed.name, maxDownloadsPerSource = 4)
+                    val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(context, mirrorBody, feed.name, maxDownloadsPerSource = 8)
                     downloadedFilesCount += files.count { it.isDownloadedLocally }
-                    val extracted = (extractProxyConfigs(mirrorBody, maxConfigs = 40) + fileUris).distinct()
+                    val extracted = (extractProxyConfigs(mirrorBody, maxConfigs = 4096) + fileUris).distinct()
                     if (extracted.isNotEmpty() || files.isNotEmpty()) {
                         usedMirror = true
                         allConfigs.addAll(extracted)
                         githubCount += extracted.size
                         logStep("  ✓ GitHub mirror (jsDelivr) [${feed.name}]: +${extracted.size} configs, ${files.size} files")
-                        if (githubCount >= 60) break
                         continue
                     }
                 }
@@ -535,9 +533,9 @@ object ConfigHarvester {
                             context = context,
                             rawBody = body,
                             sourceLabel = "@$channel",
-                            maxDownloadsPerSource = 3
+                            maxDownloadsPerSource = 6
                         )
-                        val extracted = (extractProxyConfigs(body, maxConfigs = 35) + fileUris).distinct()
+                        val extracted = (extractProxyConfigs(body, maxConfigs = 4096) + fileUris).distinct()
                         Triple(channel, extracted, files.size)
                     }
                 }
@@ -560,7 +558,7 @@ object ConfigHarvester {
             logStep("  ✗ All ${channels.size} Telegram channels were unreachable.")
         }
 
-        val finalList = UniversalConfig.mergeBalanced(allConfigs, limit = 250)
+        val finalList = UniversalConfig.mergeBalanced(allConfigs, limit = 4096)
 
         // Also harvest/preserve chainable SOCKS5/HTTP hops separately so VLESS lists never crowd them out
         val chainHopsFromMain = UniversalConfig.extractChainableProxyHops(allConfigs)
@@ -776,7 +774,7 @@ object ConfigHarvester {
                 val sb = StringBuilder()
                 val buf = CharArray(4096)
                 var total = 0
-                while (total < 350_000) {
+                while (total < 4_000_000) {
                     val n = reader.read(buf)
                     if (n < 0) break
                     sb.append(buf, 0, n)

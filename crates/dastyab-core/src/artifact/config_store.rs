@@ -30,7 +30,7 @@ use crate::store::profiles::{now_ts, profile_dir};
 use crate::store::{atomic_write, read_or_default};
 
 /// Maximum number of nodes kept per profile.
-const MAX_NODES: usize = 500;
+const MAX_NODES: usize = 4096;
 
 /// A single node imported from v2rayN (or pasted directly).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,20 +365,44 @@ pub fn import_v2rayn_store(profile: &str, path: &Path) -> Result<ImportSummary, 
 
 /// v2rayN server-entry `configType` label for a share-link scheme.
 pub fn v2rayn_config_type(url: &str) -> &'static str {
-    if url.starts_with("vless://") {
+    let low = url.to_ascii_lowercase();
+    if low.starts_with("vless://") {
         "VLESS"
-    } else if url.starts_with("vmess://") {
+    } else if low.starts_with("vmess://") {
         "VMESS"
-    } else if url.starts_with("trojan://") {
+    } else if low.starts_with("trojan://") {
         "TROJAN"
-    } else if url.starts_with("ss://") {
+    } else if low.starts_with("ss://") {
         "SS"
-    } else if url.starts_with("ssr://") {
+    } else if low.starts_with("ssr://") {
         "SSR"
-    } else if url.starts_with("hysteria2://") {
+    } else if low.starts_with("hysteria2://")
+        || low.starts_with("hy2://")
+        || low.starts_with("hysteria://")
+    {
         "HYSTERIA2"
-    } else if url.starts_with("tuic://") {
+    } else if low.starts_with("tuic://") {
         "TUIC"
+    } else if low.starts_with("wireguard://")
+        || low.starts_with("wg://")
+        || low.starts_with("warp://")
+        || low.starts_with("amneziawg://")
+    {
+        "WIREGUARD"
+    } else if low.starts_with("socks5://")
+        || low.starts_with("socks4://")
+        || low.starts_with("socks://")
+    {
+        "SOCKS"
+    } else if low.starts_with("http://") || low.starts_with("https://") {
+        "HTTP"
+    } else if low.starts_with("openvpn://") || low.starts_with("ovpn://") {
+        "OPENVPN"
+    } else if low.starts_with("npv://")
+        || low.starts_with("npv4://")
+        || low.starts_with("napsternetv://")
+    {
+        "NAPSTERNETV"
     } else {
         "VLESS"
     }
@@ -592,11 +616,77 @@ pub fn import_single_link_source_ts(
     Ok(summary)
 }
 
+/// Bulk-import `(link, published_epoch)` pairs in a single atomic load/save
+/// pass (ideal for large 619+ node `.txt` drops and multi-page harvests).
+pub fn import_links_bulk_source_ts(
+    profile: &str,
+    links: &[(String, Option<f64>)],
+    source: &str,
+) -> Result<ImportSummary, CFError> {
+    let mut store = load_node_store(profile);
+    let mut summary = ImportSummary {
+        found: links.len(),
+        ..Default::default()
+    };
+    let now = now_ts();
+    for (raw_link, published_epoch) in links {
+        let link = raw_link.trim();
+        let Some(uri) = crate::net::proxy_uri::ProxyUri::parse(link) else {
+            summary.skipped_invalid += 1;
+            continue;
+        };
+        let alias = if uri.alias.is_empty() {
+            source.to_string()
+        } else {
+            uri.alias
+        };
+        let node = V2RayNode {
+            id: crate::store::new_id(),
+            alias,
+            url: link.to_string(),
+            source_index: None,
+            source: source.to_string(),
+            added_epoch: now,
+            published_epoch: *published_epoch,
+            last_checked_epoch: None,
+            healthy: None,
+        };
+        if store.upsert(node) {
+            summary.added += 1;
+        } else {
+            if let Some(ts) = *published_epoch {
+                if let Some(existing) = store.nodes.iter_mut().find(|e| same_server(&e.url, link))
+                {
+                    if existing.published_epoch.is_none_or(|p| ts > p) {
+                        existing.published_epoch = Some(ts);
+                    }
+                }
+            }
+            summary.duplicates += 1;
+        }
+    }
+    save_node_store(profile, &store)?;
+    Ok(summary)
+}
+
+/// Convenience wrapper for [`import_links_bulk_source_ts`] without publish timestamps.
+pub fn import_links_bulk_source(
+    profile: &str,
+    links: &[String],
+    source: &str,
+) -> Result<ImportSummary, CFError> {
+    let pairs: Vec<(String, Option<f64>)> = links.iter().map(|l| (l.clone(), None)).collect();
+    import_links_bulk_source_ts(profile, &pairs, source)
+}
+
 /// List the node store as a human-readable table.
 pub fn render_nodes(profile: &str) -> String {
     let store = load_node_store(profile);
     if store.nodes.is_empty() {
-        return format!("No nodes yet in profile '{profile}'. Import a ServersStore.json or paste a vless link.");
+        return format!(
+            "No nodes yet in profile '{profile}'. \
+             Import a ServersStore.json/.txt/config file or paste a share link."
+        );
     }
     let mut out = format!(
         "Nodes in profile '{profile}' ({} total):\n",
@@ -994,12 +1084,18 @@ mod tests {
         store.set_active("anchor");
         save_node_store(&profile, &store).unwrap();
 
-        // Bulk-import 510 fresh nodes (past MAX_NODES).
-        for i in 0..510 {
-            let uuid = format!("00000000-0000-0000-0000-{i:012}");
-            let link = format!("vless://{uuid}@10.0.0.{ip}:443?type=tcp#t{i}", ip = i % 250);
-            import_single_link(&profile, &link).unwrap();
-        }
+        // Bulk-import past MAX_NODES using batch upsert.
+        let count = MAX_NODES + 10;
+        let batch: Vec<String> = (0..count)
+            .map(|i| {
+                let uuid = format!("00000000-0000-0000-0000-{i:012}");
+                let a = (i / 250) % 250;
+                let b = i % 250;
+                format!("vless://{uuid}@10.{a}.0.{b}:443?type=tcp#t{i}")
+            })
+            .collect();
+        let sum = import_links_bulk_source(&profile, &batch, SOURCE_PASTED).unwrap();
+        assert_eq!(sum.added, count);
         let final_store = load_node_store(&profile);
         assert_eq!(final_store.nodes.len(), MAX_NODES);
         // The anchor must still be present and active.

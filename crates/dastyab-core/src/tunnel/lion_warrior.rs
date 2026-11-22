@@ -291,6 +291,8 @@ pub enum HopScheme {
     Vmess,
     Trojan,
     Shadowsocks,
+    Hysteria2,
+    Tuic,
     WireGuard,
     Socks5,
     Http,
@@ -303,6 +305,8 @@ impl HopScheme {
             Self::Vmess => "vmess",
             Self::Trojan => "trojan",
             Self::Shadowsocks => "shadowsocks",
+            Self::Hysteria2 => "hysteria2",
+            Self::Tuic => "tuic",
             Self::WireGuard => "wireguard",
             Self::Socks5 => "socks",
             Self::Http => "http",
@@ -366,13 +370,20 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
     }
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
+        if crate::net::proxy_uri::is_non_proxy_http_url(trimmed) {
+            return Err(CFError::new(
+                "chain",
+                format!("web link is not an HTTP proxy: {trimmed}"),
+                "Supply an explicit HTTP proxy host:port or tunnel share-link.",
+            ));
+        }
         let url = url::Url::parse(trimmed)
             .map_err(|e| CFError::new("chain", format!("invalid http proxy url: {e}"), ""))?;
         let host = url
             .host_str()
             .ok_or_else(|| CFError::new("chain", "missing http proxy host", ""))?
             .to_string();
-        let port = url.port_or_known_default().unwrap_or(8080);
+        let port = url.port().unwrap_or(8080);
         return Ok(ChainHop {
             scheme: HopScheme::Http,
             host: host.clone(),
@@ -538,7 +549,40 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
                 is_local_bridge: false,
             })
         }
-        "wireguard" | "wg" | "warp" => {
+        "hysteria2" | "hy2" | "hysteria" => {
+            set_default_param(&mut params, "security", "tls");
+            set_default_param(&mut params, "type", "tcp");
+            Ok(ChainHop {
+                scheme: HopScheme::Hysteria2,
+                host: parsed.host,
+                port: parsed.port,
+                auth_id: String::new(),
+                secret: parsed.id,
+                method: String::new(),
+                params,
+                alias: parsed.alias,
+                raw: trimmed.to_string(),
+                is_local_bridge: false,
+            })
+        }
+        "tuic" => {
+            set_default_param(&mut params, "security", "tls");
+            set_default_param(&mut params, "type", "tcp");
+            let pass = params.get("password").cloned().unwrap_or_default();
+            Ok(ChainHop {
+                scheme: HopScheme::Tuic,
+                host: parsed.host,
+                port: parsed.port,
+                auth_id: parsed.id,
+                secret: pass,
+                method: String::new(),
+                params,
+                alias: parsed.alias,
+                raw: trimmed.to_string(),
+                is_local_bridge: false,
+            })
+        }
+        "wireguard" | "wg" | "warp" | "amneziawg" => {
             if parsed.id.is_empty() {
                 return Err(CFError::new(
                     "chain",
@@ -559,7 +603,7 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
                 is_local_bridge: false,
             })
         }
-        "socks5" | "socks" => {
+        "socks5" | "socks4" | "socks" => {
             let is_local = parsed.host == "127.0.0.1" || parsed.host == "localhost";
             let authority = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
             let (user, pass) = if authority.contains('@') {
@@ -587,27 +631,54 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
         other => Err(CFError::new(
             "chain",
             format!("scheme '{other}' requires an external core (not direct xray chain)"),
-            "Use vless://, vmess://, trojan://, ss://, wireguard://, socks5://, or http://.",
+            "Use vless://, vmess://, trojan://, ss://, hy2://, tuic://, wireguard://, or socks5://.",
         )),
     }
 }
 
-/// Extract runnable multi-layer hops from `.npv`/`.npvt`/`.npvs`/`.npv4`,
-/// `.ovpn`/`.openvpn`, `.conf`/`.wg` (WireGuard INI), `.json`, `.yaml`, or
-/// base64 `.sub`/`.txt` config files.
-pub fn parse_configs_from_blob(filename: &str, bytes: &[u8]) -> Vec<ChainHop> {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    let mut hops = Vec::new();
-    let mut seen = HashSet::new();
-    let mut push_hop = |h: ChainHop| {
-        if seen.insert(h.key()) {
-            hops.push(h);
-        }
-    };
+fn is_not_b64_char(c: char) -> bool {
+    !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'))
+}
 
-    // 1. Collect printable ASCII/UTF-8 text + any WireGuard/OpenVPN/URI snippets
-    // (works for plain text, .ovpn, .wg, AND NapsternetV .npv/.npvt/.npvs payloads).
-    let text = String::from_utf8_lossy(bytes);
+fn decode_text_with_bom(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(&bytes[3..]).into_owned();
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) && bytes.len() >= 4 {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) && bytes.len() >= 4 {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn push_unique_uri(out: &mut Vec<String>, seen: &mut HashSet<String>, raw: String) {
+    let uri = raw.trim().to_string();
+    if uri.is_empty() {
+        return;
+    }
+    if !crate::net::proxy_uri::is_non_proxy_http_url(&uri) && seen.insert(uri.clone()) {
+        out.push(uri);
+    }
+}
+
+/// Extract canonical proxy share URIs from ANY `.txt`, `.sub`, `.yaml`/`.yml`,
+/// `.json`, `.conf`/`.wg`/`.awg`, `.ovpn`, `.npv*`, `.hc`, `.ehi`, `.custom`,
+/// or arbitrary config bundle bytes (mixed with prose, emojis, web links,
+/// base64 blobs, Clash YAML, Sing-Box/Xray JSON, WireGuard INI, OpenVPN).
+pub fn extract_all_config_links_from_blob(filename: &str, bytes: &[u8]) -> Vec<String> {
+    let _ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let text = decode_text_with_bom(bytes);
+
     let mut printable = String::with_capacity(bytes.len().min(65536));
     let mut run = String::new();
     for &b in bytes {
@@ -628,115 +699,647 @@ pub fn parse_configs_from_blob(filename: &str, bytes: &[u8]) -> Vec<ChainHop> {
     let combined = if printable.len() > text.len() / 2 {
         format!("{printable}\n{text}")
     } else {
-        text.into_owned()
+        text
     };
 
-    // 2. Try base64-decoded whole-blob subscriptions or base64 payloads inside .npv*.
+    // Recursive Base64 expansion (up to 3 rounds) for .txt, subscriptions, and
+    // arbitrary binary/text drops.
     let mut scan_corpus = combined.clone();
-    if matches!(ext.as_str(), "sub" | "txt" | "npv" | "npvt" | "npvs" | "npv4" | "") {
-        let compact: String = combined.chars().filter(|c| !c.is_whitespace()).collect();
-        if compact.len() >= 16 {
-            if let Some(dec) = decode_base64_flex(&compact) {
-                if let Ok(s) = String::from_utf8(dec) {
-                    scan_corpus.push('\n');
-                    scan_corpus.push_str(&s);
-                }
-            }
-        }
-        // Check long base64 runs embedded inside .npv* / text blocks.
-        let is_b64 = |c: char| {
-            c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_')
-        };
-        for tok in combined.split(|c: char| !is_b64(c)) {
-            if tok.len() >= 28 {
-                if let Some(dec) = decode_base64_flex(tok) {
+    let mut frontier = vec![combined];
+    for _depth in 0..3 {
+        let mut next_frontier = Vec::new();
+        for chunk in frontier {
+            let compact: String = chunk.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact.len() >= 16 {
+                if let Some(dec) = decode_base64_flex(&compact) {
                     let s = String::from_utf8_lossy(&dec);
-                    if s.contains("://") || s.contains("[Peer]") || s.contains("\"outbounds\"") {
+                    if looks_like_decoded_configs(&s) && !scan_corpus.contains(s.as_ref()) {
                         scan_corpus.push('\n');
                         scan_corpus.push_str(&s);
+                        next_frontier.push(s.into_owned());
+                    } else if looks_like_b64_layer(&s) {
+                        next_frontier.push(s.into_owned());
                     }
                 }
             }
-        }
-    }
-
-    // 3. Extract standard share URIs + WireGuard [Interface]/[Peer] + OpenVPN inline.
-    for link in crate::discovery::harvest::extract_proxy_links(&scan_corpus) {
-        if let Ok(h) = parse_chain_hop(&link) {
-            push_hop(h);
-        }
-    }
-
-    // 4. Parse explicit .ovpn `http-proxy <h> <p>` / `socks-proxy <h> <p>` relays.
-    if matches!(ext.as_str(), "ovpn" | "openvpn") || scan_corpus.contains("http-proxy ") {
-        for raw_line in scan_corpus.lines() {
-            let line = raw_line.split(['#', ';']).next().unwrap_or("").trim();
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 && matches!(parts[0], "http-proxy" | "socks-proxy") {
-                if let Ok(port) = parts[2].parse::<u16>() {
-                    let scheme = if parts[0] == "socks-proxy" {
-                        "socks5"
-                    } else {
-                        "http"
-                    };
-                    if let Ok(h) = parse_chain_hop(&format!("{scheme}://{}:{port}", parts[1])) {
-                        push_hop(h);
+            for raw_line in chunk.lines() {
+                let line = raw_line.trim();
+                if line.len() >= 20 && !line.contains("://") && !line.starts_with('#') {
+                    let cand = line.split('#').next().unwrap_or(line);
+                    if let Some(dec) = decode_base64_flex(cand) {
+                        let s = String::from_utf8_lossy(&dec);
+                        if looks_like_decoded_configs(&s) && !scan_corpus.contains(s.as_ref()) {
+                            scan_corpus.push('\n');
+                            scan_corpus.push_str(&s);
+                            next_frontier.push(s.into_owned());
+                        } else if looks_like_b64_layer(&s) {
+                            next_frontier.push(s.into_owned());
+                        }
                     }
                 }
             }
-        }
-    }
-
-    // 5. Parse JSON configs (sing-box / xray outbounds array or v2rayN array).
-    let trimmed_corpus = scan_corpus.trim_start();
-    if ext == "json" || trimmed_corpus.starts_with('{') || trimmed_corpus.starts_with('[') {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&scan_corpus) {
-            let outs = val.get("outbounds").and_then(|o| o.as_array());
-            let outs = outs.or_else(|| val.as_array());
-            if let Some(arr) = outs {
-                for ob in arr {
-                    let proto = ob
-                        .get("type")
-                        .or_else(|| ob.get("protocol"))
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("");
-                    if let Some(server) = ob.get("server").and_then(|x| x.as_str()) {
-                        let raw_port = ob.get("server_port").and_then(|x| x.as_u64());
-                        let port = raw_port.unwrap_or(0) as u16;
-                        if port > 0 {
-                            let uuid = ob.get("uuid").and_then(|x| x.as_str());
-                            let pass = ob.get("password").and_then(|x| x.as_str());
-                            let uri = match (proto, uuid, pass) {
-                                ("vless", Some(u), _) => {
-                                    Some(format!("vless://{u}@{server}:{port}?security=tls"))
-                                }
-                                ("trojan", _, Some(pw)) => {
-                                    Some(format!("trojan://{pw}@{server}:{port}?security=tls"))
-                                }
-                                ("socks", _, _) => Some(format!("socks5://{server}:{port}")),
-                                ("http", _, _) => Some(format!("http://{server}:{port}")),
-                                _ => None,
-                            };
-                            if let Some(u) = uri {
-                                if let Ok(h) = parse_chain_hop(&u) {
-                                    push_hop(h);
-                                }
-                            }
+            for tok in chunk.split(is_not_b64_char) {
+                if tok.len() >= 24 {
+                    if let Some(dec) = decode_base64_flex(tok) {
+                        let s = String::from_utf8_lossy(&dec);
+                        if looks_like_decoded_configs(&s) && !scan_corpus.contains(s.as_ref()) {
+                            scan_corpus.push('\n');
+                            scan_corpus.push_str(&s);
+                            next_frontier.push(s.into_owned());
+                        } else if looks_like_b64_layer(&s) {
+                            next_frontier.push(s.into_owned());
                         }
                     }
                 }
             }
         }
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
     }
 
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    for link in crate::discovery::harvest::extract_proxy_links(&scan_corpus) {
+        push_unique_uri(&mut out, &mut seen, link);
+    }
+
+    // Explicit `http://` / `https://` proxy endpoints with explicit `:port` (filtering web URLs).
+    for prefix in ["http://", "https://"] {
+        for (pos, _) in scan_corpus.match_indices(prefix) {
+            let tail = &scan_corpus[pos..];
+            let end = tail
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']')
+                })
+                .unwrap_or(tail.len());
+            let cand = tail[..end].trim_end_matches([',', ';']);
+            if let Some(uri) = crate::net::proxy_uri::ProxyUri::parse(cand) {
+                push_unique_uri(&mut out, &mut seen, uri.raw);
+            }
+        }
+    }
+
+    // OpenVPN `http-proxy` / `socks-proxy` lines.
+    if _ext == "ovpn" || _ext == "openvpn" || scan_corpus.contains("http-proxy ") {
+        for raw_line in scan_corpus.lines() {
+            let line = raw_line.split(['#', ';']).next().unwrap_or("").trim();
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && matches!(parts[0], "http-proxy" | "socks-proxy") {
+                if let Ok(port) = parts[2].parse::<u16>() {
+                    if port > 0 {
+                        let scheme = if parts[0] == "socks-proxy" {
+                            "socks5"
+                        } else {
+                            "http"
+                        };
+                        push_unique_uri(
+                            &mut out,
+                            &mut seen,
+                            format!("{scheme}://{}:{port}", parts[1]),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Embedded JSON objects / arrays (Sing-Box, Xray, v2rayN, VMess).
+    for json_str in extract_json_candidates(&scan_corpus) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+            for link in extract_links_from_json_value(&val) {
+                push_unique_uri(&mut out, &mut seen, link);
+            }
+        }
+    }
+
+    // Clash / Mihomo YAML `proxies:` blocks or inline `- { ... }` entries.
+    for link in extract_clash_yaml_links(&scan_corpus) {
+        push_unique_uri(&mut out, &mut seen, link);
+    }
+
+    out
+}
+
+fn looks_like_decoded_configs(s: &str) -> bool {
+    s.contains("://")
+        || s.contains("[Peer]")
+        || s.contains("\"outbounds\"")
+        || s.contains("\"servers\"")
+        || s.contains("proxies:")
+        || (s.contains("server:") && s.contains("port:"))
+}
+
+fn looks_like_b64_layer(s: &str) -> bool {
+    let mut non_ws = 0usize;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        if is_not_b64_char(ch) {
+            return false;
+        }
+        non_ws += 1;
+    }
+    non_ws >= 16
+}
+
+fn extract_json_candidates(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let trimmed = text.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        out.push(trimmed);
+    }
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let open = bytes[i];
+        if open != b'{' && open != b'[' {
+            i += 1;
+            continue;
+        }
+        let close = if open == b'{' { b'}' } else { b']' };
+        let start = i;
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut escape = false;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if in_str {
+                if escape {
+                    escape = false;
+                } else if c == b'\\' {
+                    escape = true;
+                } else if c == b'"' {
+                    in_str = false;
+                }
+            } else if c == b'"' {
+                in_str = true;
+            } else if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    let slice = &text[start..=i];
+                    if slice.len() > 16
+                        && (slice.contains("outbounds")
+                            || slice.contains("servers")
+                            || slice.contains("vnext")
+                            || slice.contains("server_port")
+                            || slice.contains("\"add\""))
+                    {
+                        out.push(slice);
+                    }
+                    i += 1;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            i = start + 1;
+        }
+    }
+    out
+}
+
+fn json_str<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()).filter(|s| !s.is_empty()))
+}
+
+fn json_u16(v: &serde_json::Value, keys: &[&str]) -> Option<u16> {
+    keys.iter().find_map(|k| {
+        let val = v.get(*k)?;
+        val.as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .or_else(|| val.as_str().and_then(|s| s.trim().parse::<u16>().ok()))
+    })
+}
+
+fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut items: Vec<&serde_json::Value> = Vec::new();
+    if let Some(arr) = val.get("outbounds").and_then(|o| o.as_array()) {
+        items.extend(arr.iter());
+    }
+    if let Some(arr) = val.get("servers").and_then(|s| s.as_array()) {
+        items.extend(arr.iter());
+    }
+    if let Some(arr) = val.as_array() {
+        items.extend(arr.iter());
+    }
+    if items.is_empty() && val.is_object() {
+        items.push(val);
+    }
+
+    for ob in items {
+        if let Some(u) = json_str(ob, &["url", "serverUrl", "link", "uri"]) {
+            if u.contains("://") && !crate::net::proxy_uri::is_non_proxy_http_url(u) {
+                out.push(u.to_string());
+                continue;
+            }
+        }
+        let proto = json_str(ob, &["type", "protocol"])
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let alias = json_str(ob, &["tag", "ps", "remarks", "name"]).unwrap_or("");
+        // Legacy vmess JSON object
+        if let (Some(add), Some(port), Some(id)) = (
+            json_str(ob, &["add"]),
+            json_u16(ob, &["port"]),
+            json_str(ob, &["id"]),
+        ) {
+            if port > 0 && (proto.is_empty() || proto == "vmess") {
+                let encoded = base64::engine::general_purpose::STANDARD
+                    .encode(ob.to_string().as_bytes());
+                out.push(format!("vmess://{encoded}"));
+                let _ = (add, alias);
+                continue;
+            }
+        }
+        // Xray outbound style (`settings.vnext` / `settings.servers`)
+        if let Some(vnext) = ob
+            .get("settings")
+            .and_then(|s| s.get("vnext"))
+            .and_then(|x| x.as_array())
+        {
+            for vn in vnext {
+                let host = json_str(vn, &["address"]).unwrap_or("");
+                let port = json_u16(vn, &["port"]).unwrap_or(0);
+                let uuid = vn
+                    .get("users")
+                    .and_then(|u| u.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|u| json_str(u, &["id"]))
+                    .unwrap_or("");
+                if !host.is_empty() && port > 0 && !uuid.is_empty() {
+                    if proto == "vmess" {
+                        let vobj = serde_json::json!({
+                            "v": "2", "ps": alias, "add": host,
+                            "port": port.to_string(), "id": uuid, "aid": "0"
+                        });
+                        let enc = base64::engine::general_purpose::STANDARD
+                            .encode(vobj.to_string().as_bytes());
+                        out.push(format!("vmess://{enc}"));
+                    } else {
+                        out.push(format!("vless://{uuid}@{host}:{port}?security=tls#{alias}"));
+                    }
+                }
+            }
+        }
+        // Sing-Box flat outbound style (`server` + `server_port`)
+        let Some(server) = json_str(ob, &["server", "address"]) else {
+            continue;
+        };
+        let port = json_u16(ob, &["server_port", "port"]).unwrap_or(0);
+        if port == 0 {
+            continue;
+        }
+        let uuid = json_str(ob, &["uuid", "id"]);
+        let pass = json_str(ob, &["password", "token"]);
+        let method = json_str(ob, &["method", "cipher"]).unwrap_or("aes-256-gcm");
+        let tls_on = ob
+            .get("tls")
+            .and_then(|t| t.get("enabled").and_then(|b| b.as_bool()))
+            .unwrap_or(false);
+        let sni = ob
+            .get("tls")
+            .and_then(|t| json_str(t, &["server_name", "sni"]))
+            .unwrap_or("");
+        let net = ob
+            .get("transport")
+            .and_then(|t| json_str(t, &["type"]))
+            .unwrap_or("tcp");
+        let sec = if tls_on { "tls" } else { "none" };
+        let uri = match (proto.as_str(), uuid, pass) {
+            ("vless", Some(u), _) => Some(format!(
+                "vless://{u}@{server}:{port}?security={sec}&type={net}&sni={sni}#{alias}"
+            )),
+            ("vmess", Some(u), _) => {
+                let vobj = serde_json::json!({
+                    "v": "2", "ps": alias, "add": server,
+                    "port": port.to_string(), "id": u, "aid": "0",
+                    "net": net, "tls": if tls_on { "tls" } else { "" }, "sni": sni
+                });
+                let enc =
+                    base64::engine::general_purpose::STANDARD.encode(vobj.to_string().as_bytes());
+                Some(format!("vmess://{enc}"))
+            }
+            ("trojan", _, Some(pw)) => Some(format!(
+                "trojan://{pw}@{server}:{port}?security=tls&type={net}&sni={sni}#{alias}"
+            )),
+            ("shadowsocks" | "ss", _, Some(pw)) => {
+                let creds = base64::engine::general_purpose::STANDARD
+                    .encode(format!("{method}:{pw}").as_bytes());
+                Some(format!("ss://{creds}@{server}:{port}#{alias}"))
+            }
+            ("hysteria2" | "hy2", _, Some(pw)) => {
+                Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"))
+            }
+            ("tuic", Some(u), Some(pw)) => {
+                Some(format!("tuic://{u}:{pw}@{server}:{port}?sni={sni}#{alias}"))
+            }
+            ("wireguard" | "wg", _, _) => {
+                let pk = json_str(ob, &["private_key", "secretKey"]).unwrap_or("");
+                let peer_pk = json_str(ob, &["peer_public_key", "publicKey"]).unwrap_or("");
+                if !pk.is_empty() {
+                    Some(format!(
+                        "wireguard://{pk}@{server}:{port}?publickey={peer_pk}#{alias}"
+                    ))
+                } else {
+                    None
+                }
+            }
+            ("socks" | "socks5", _, _) => Some(format!("socks5://{server}:{port}#{alias}")),
+            ("http", _, _) => Some(format!("http://{server}:{port}#{alias}")),
+            _ => None,
+        };
+        if let Some(u) = uri {
+            out.push(u);
+        }
+    }
+    out
+}
+
+fn unquote_yaml(s: &str) -> String {
+    let t = s.trim();
+    if t.len() >= 2
+        && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
+    {
+        t[1..t.len() - 1].to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn split_flow_pairs(inner: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut brace = 0i32;
+    let mut in_sq = false;
+    let mut in_dq = false;
+    for (idx, ch) in inner.char_indices() {
+        match ch {
+            '\'' if !in_dq => in_sq = !in_sq,
+            '"' if !in_sq => in_dq = !in_dq,
+            '{' | '[' if !in_sq && !in_dq => brace += 1,
+            '}' | ']' if !in_sq && !in_dq => brace -= 1,
+            ',' if !in_sq && !in_dq && brace == 0 => {
+                parts.push(&inner[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < inner.len() {
+        parts.push(&inner[start..]);
+    }
+    parts
+}
+
+fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
+    let ptype = map.get("type")?.to_ascii_lowercase();
+    let server = map.get("server")?.trim();
+    let port: u16 = map.get("port")?.trim().parse().ok()?;
+    if server.is_empty() || port == 0 {
+        return None;
+    }
+    let name = map.get("name").map(String::as_str).unwrap_or(server);
+    let sni = map
+        .get("servername")
+        .or_else(|| map.get("sni"))
+        .map(String::as_str)
+        .unwrap_or(server);
+    let net = map.get("network").map(String::as_str).unwrap_or("tcp");
+    let tls_val = map
+        .get("tls")
+        .map(|s| s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let path = map.get("path").map(String::as_str).unwrap_or("/");
+    let host_hdr = map.get("host").map(String::as_str).unwrap_or(sni);
+    let pbk = map.get("public-key").map(String::as_str).unwrap_or("");
+    let sid = map.get("short-id").map(String::as_str).unwrap_or("");
+    let fp = map
+        .get("client-fingerprint")
+        .or_else(|| map.get("fingerprint"))
+        .map(String::as_str)
+        .unwrap_or("chrome");
+    match ptype.as_str() {
+        "vless" => {
+            let uuid = map.get("uuid")?;
+            let sec = if !pbk.is_empty() {
+                "reality"
+            } else if tls_val {
+                "tls"
+            } else {
+                "none"
+            };
+            let mut q = format!("security={sec}&type={net}&sni={sni}&host={host_hdr}&path={path}");
+            if !fp.is_empty() {
+                q.push_str(&format!("&fp={fp}"));
+            }
+            if !pbk.is_empty() {
+                q.push_str(&format!("&pbk={pbk}&sid={sid}"));
+            }
+            if let Some(flow) = map.get("flow").filter(|s| !s.is_empty()) {
+                q.push_str(&format!("&flow={flow}"));
+            }
+            Some(format!("vless://{uuid}@{server}:{port}?{q}#{name}"))
+        }
+        "vmess" => {
+            let uuid = map.get("uuid")?;
+            let vobj = serde_json::json!({
+                "v": "2", "ps": name, "add": server, "port": port.to_string(),
+                "id": uuid, "aid": map.get("alterId").map(String::as_str).unwrap_or("0"),
+                "net": net, "tls": if tls_val { "tls" } else { "" },
+                "sni": sni, "host": host_hdr, "path": path
+            });
+            let enc =
+                base64::engine::general_purpose::STANDARD.encode(vobj.to_string().as_bytes());
+            Some(format!("vmess://{enc}"))
+        }
+        "trojan" => {
+            let pw = map.get("password")?;
+            Some(format!(
+                "trojan://{pw}@{server}:{port}?security=tls&type={net}&sni={sni}&path={path}#{name}"
+            ))
+        }
+        "ss" => {
+            let cipher = map.get("cipher").map(String::as_str).unwrap_or("aes-256-gcm");
+            let pw = map.get("password")?;
+            let enc = base64::engine::general_purpose::STANDARD
+                .encode(format!("{cipher}:{pw}").as_bytes());
+            Some(format!("ss://{enc}@{server}:{port}#{name}"))
+        }
+        "hysteria2" | "hy2" => {
+            let pw = map.get("password")?;
+            Some(format!(
+                "hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"
+            ))
+        }
+        "tuic" => {
+            let uuid = map.get("uuid")?;
+            let pw = map.get("password").map(String::as_str).unwrap_or("");
+            Some(format!(
+                "tuic://{uuid}:{pw}@{server}:{port}?sni={sni}#{name}"
+            ))
+        }
+        "wireguard" => {
+            let pk = map.get("private-key")?;
+            let peer_pk = map.get("public-key").map(String::as_str).unwrap_or("");
+            Some(format!(
+                "wireguard://{pk}@{server}:{port}?publickey={peer_pk}#{name}"
+            ))
+        }
+        "socks5" => Some(format!("socks5://{server}:{port}#{name}")),
+        "http" => Some(format!("http://{server}:{port}#{name}")),
+        _ => None,
+    }
+}
+
+fn parse_flow_yaml_entry(inner: &str, out: &mut HashMap<String, String>) {
+    for kv in split_flow_pairs(inner) {
+        if let Some((k, v)) = kv.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim();
+            if val.starts_with('{') && val.ends_with('}') {
+                parse_flow_yaml_entry(&val[1..val.len() - 1], out);
+            } else {
+                let uq = unquote_yaml(val);
+                if key.eq_ignore_ascii_case("Host") {
+                    out.insert("host".to_string(), uq);
+                } else {
+                    out.insert(key, uq);
+                }
+            }
+        }
+    }
+}
+
+fn extract_clash_yaml_links(text: &str) -> Vec<String> {
+    if !text.contains("type:") && !text.contains("proxies:") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cur: Option<HashMap<String, String>> = None;
+    let flush = |cur: &mut Option<HashMap<String, String>>, out: &mut Vec<String>| {
+        if let Some(m) = cur.take() {
+            if let Some(u) = clash_dict_to_uri(&m) {
+                out.push(u);
+            }
+        }
+    };
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(after_dash) = trimmed.strip_prefix("- ") {
+            let inner = after_dash.trim();
+            if inner.starts_with('{') && inner.ends_with('}') {
+                flush(&mut cur, &mut out);
+                let mut m = HashMap::new();
+                parse_flow_yaml_entry(&inner[1..inner.len() - 1], &mut m);
+                if let Some(u) = clash_dict_to_uri(&m) {
+                    out.push(u);
+                }
+                continue;
+            }
+            if let Some((k, v)) = inner.split_once(':') {
+                flush(&mut cur, &mut out);
+                let mut m = HashMap::new();
+                m.insert(k.trim().to_string(), unquote_yaml(v));
+                cur = Some(m);
+                continue;
+            }
+        }
+        // Top-level YAML key (no indent, not a list item) closes the current proxy item.
+        if !line.starts_with(' ') && !line.starts_with('\t') && !trimmed.starts_with('-') {
+            flush(&mut cur, &mut out);
+            continue;
+        }
+        if let Some(m) = cur.as_mut() {
+            if let Some((k, v)) = trimmed.split_once(':') {
+                let key = k.trim();
+                let val = v.trim();
+                if val.starts_with('{') && val.ends_with('}') {
+                    parse_flow_yaml_entry(&val[1..val.len() - 1], m);
+                } else if !val.is_empty() {
+                    let uq = unquote_yaml(val);
+                    if key.eq_ignore_ascii_case("Host") {
+                        m.insert("host".to_string(), uq);
+                    } else {
+                        m.insert(key.to_string(), uq);
+                    }
+                }
+            }
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// Extract runnable multi-layer hops from `.txt`, `.npv`/`.npvt`/`.npvs`/`.npv4`,
+/// `.ovpn`/`.openvpn`, `.conf`/`.wg`/`.awg`, `.json`, `.yaml`/`.yml`, `.sub`,
+/// or any unknown proxy drop file.
+pub fn parse_configs_from_blob(filename: &str, bytes: &[u8]) -> Vec<ChainHop> {
+    let mut hops = Vec::new();
+    let mut seen = HashSet::new();
+    for link in extract_all_config_links_from_blob(filename, bytes) {
+        if let Ok(h) = parse_chain_hop(&link) {
+            if seen.insert(h.key()) {
+                hops.push(h);
+            }
+        }
+    }
     hops
 }
 
+/// PattNG-style Entry -> Exit chaining helper: route `exit` through `entry`
+/// (e.g., WARP WireGuard or a working domestic/entry relay) via `dialerProxy`.
+pub fn chain_entry_exit_with_warp(
+    exit: &ChainHop,
+    entry: &ChainHop,
+    socks_port: u16,
+    fragment_dpi: bool,
+) -> Result<String, CFError> {
+    let opts = ChainDialOptions {
+        socks_port,
+        fragment_dpi,
+        ..Default::default()
+    };
+    build_xray_chain_config(&[exit.clone(), entry.clone()], &opts)
+}
+
 fn decode_base64_flex(raw: &str) -> Option<Vec<u8>> {
-    let clean = raw.trim().replace('-', "+").replace('_', "/");
-    base64::engine::general_purpose::STANDARD
+    let mut clean: String = raw
+        .trim()
+        .trim_end_matches('#')
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    clean = clean.replace('-', "+").replace('_', "/");
+    let unpadded = clean.trim_end_matches('=');
+    let mut repadded = unpadded.to_string();
+    let rem = repadded.len() % 4;
+    if rem == 2 {
+        repadded.push_str("==");
+    } else if rem == 3 {
+        repadded.push('=');
+    }
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+    STANDARD
         .decode(&clean)
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&clean))
+        .or_else(|_| STANDARD.decode(&repadded))
+        .or_else(|_| STANDARD_NO_PAD.decode(unpadded))
         .ok()
 }
 
@@ -932,6 +1535,30 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
                 }
             })
         }
+        HopScheme::Hysteria2 => serde_json::json!({
+            "tag": tag,
+            "protocol": "hysteria2",
+            "settings": {
+                "servers": [{
+                    "address": hop.host,
+                    "port": hop.port,
+                    "password": hop.secret
+                }]
+            }
+        }),
+        HopScheme::Tuic => serde_json::json!({
+            "tag": tag,
+            "protocol": "tuic",
+            "settings": {
+                "servers": [{
+                    "address": hop.host,
+                    "port": hop.port,
+                    "uuid": hop.auth_id,
+                    "password": hop.secret,
+                    "congestionControl": "bbr"
+                }]
+            }
+        }),
         HopScheme::WireGuard => {
             let raw_addr = hop.params.get("address").map(String::as_str);
             let addr = parse_wg_addresses(raw_addr);
@@ -2361,5 +2988,68 @@ mod tests {
             80,
         );
         assert!(plans.iter().any(|p| p.hops.len() == 6));
+    }
+
+    #[test]
+    fn extracts_619_mixed_servers_from_persian_telegram_txt_and_chains_warp() {
+        let mut blob = String::from(concat!(
+            "داخل فایل 619 عدد سرور از تمام کشورها هست ری اکشن فراموش نکنید\n",
+            "مخابرات و تمام اپراتورها\n",
+            "بااین برنامه اجرا کنید PattNG (https://t.me/proxy_kafee/48582?single)\n",
+            "#ویتوری #v2box #pattNG\n",
+            "@proxy_kafee\n",
+            "https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50\n",
+            "https://t.me/proxy_kafee/46097\n",
+        ));
+        for i in 0..615 {
+            let a = (i / 250) + 1;
+            let b = (i % 250) + 1;
+            blob.push_str(&format!(
+                "vless://11111111-1111-1111-1111-{i:012}@198.{a}.0.{b}:443?security=tls#S{i}\n"
+            ));
+        }
+        // Add Clash YAML, Sing-Box JSON, double-base64, WireGuard WARP inside the same .txt
+        blob.push_str(
+            "proxies:\n  - {name: clash-hy2, type: hysteria2, server: 203.0.113.10, port: 8443, password: p1}\n",
+        );
+        blob.push_str(
+            r#"{"outbounds":[{"type":"trojan","server":"203.0.113.11","server_port":443,"password":"pw"}]}"#,
+        );
+        blob.push('\n');
+        let inner = "vless://22222222-2222-2222-2222-222222222222@203.0.113.12:443?security=tls#b64";
+        let b1 = base64::engine::general_purpose::STANDARD.encode(inner);
+        let b2 = base64::engine::general_purpose::STANDARD.encode(&b1);
+        blob.push_str(&b2);
+        blob.push('\n');
+        blob.push_str(concat!(
+            "[Interface]\nPrivateKey = d2FycF9wcml2XzAxMjM0NTY3ODlhYmNkZWY=\n",
+            "[Peer]\nPublicKey = d2FycF9wdWJfMDEyMzQ1Njc4OWFiY2RlZg==\n",
+            "Endpoint = 162.159.192.1:2408\n"
+        ));
+
+        let links = extract_all_config_links_from_blob("619_servers.txt", blob.as_bytes());
+        assert_eq!(
+            links.len(),
+            619,
+            "expected 619 servers extracted, got {}",
+            links.len()
+        );
+        assert!(!links.iter().any(|u| u.contains("t.me/proxy_kafee")));
+        assert!(!links.iter().any(|u| u.contains("github.com/patterniha")));
+
+        let hops = parse_configs_from_blob("619_servers.txt", blob.as_bytes());
+        assert_eq!(hops.len(), 619);
+        let warp = hops
+            .iter()
+            .find(|h| h.scheme == HopScheme::WireGuard)
+            .unwrap();
+        let exit = hops.iter().find(|h| h.scheme == HopScheme::Vless).unwrap();
+        let chained = chain_entry_exit_with_warp(exit, warp, 10888, true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&chained).unwrap();
+        let outs = v["outbounds"].as_array().unwrap();
+        assert_eq!(outs[0]["tag"], "exit");
+        assert_eq!(outs[0]["sockopt"]["dialerProxy"], "entry");
+        assert_eq!(outs[1]["protocol"], "wireguard");
+        assert_eq!(outs[1]["sockopt"]["dialerProxy"], "frag-dialer");
     }
 }

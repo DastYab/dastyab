@@ -684,3 +684,65 @@ def test_warrior_eight_hop_and_wireguard_outbound(fl):
     assert obs[7]["settings"]["peers"][0]["publicKey"] == "wg-pub"
     assert obs[0]["streamSettings"]["tlsSettings"]["fingerprint"] == "random"
 
+
+def test_flow_telegram_619_txt_and_all_extensions(fl):
+    tg_text = (
+        "داخل فایل 619 عدد سرور از تمام کشورها هست ری اکشن فراموش نکنید\n"
+        "بااین برنامه اجرا کنید PattNG (https://t.me/proxy_kafee/48582?single)👉👉 کیلیک کنید\n"
+        "https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50\n"
+        "🔺آموزش fragment+fingerprint (https://t.me/proxy_kafee/46097)\n"
+        "@proxy_kafee\n"
+    ) + "\n".join(
+        f"vless://aaaaaaaa-bbbb-cccc-dddd-{i:012d}@203.0.113.{(i % 250) + 1}:{443 + (i % 40)}?security=tls#n{i}"
+        for i in range(619)
+    )
+    extracted = fl.parse_config_file_bytes("619_servers.txt", tg_text.encode("utf-8"))
+    assert len(extracted) == 619
+    assert not any(n["addr"] in ("t.me", "github.com") for n in extracted)
+
+    singbox = json.dumps({
+        "outbounds": [
+            {"type": "hy2", "server": "198.51.100.61", "server_port": 8443, "password": "pw"},
+            {"type": "direct", "tag": "direct"},
+        ]
+    }).encode()
+    assert fl.parse_config_file_bytes("sbox.singbox", singbox)[0]["proto"] == "hy2"
+
+
+def test_flow_pattng_entry_exit_chain_and_android_parity(fl, tmp_path, monkeypatch):
+    warp_entry = fl.parse_node_uri("warp://privK%3D@162.159.192.1:2408?publickey=pubK%3D")
+    exit_node = _vless("203.0.113.80", security="tls")
+    cfg = fl.build_entry_exit_chain(warp_entry, exit_node, port=10860, fragment=True, fp="chrome")
+    obs = cfg["outbounds"]
+    assert obs[0]["tag"] == "exit"
+    assert obs[0]["sockopt"]["dialerProxy"] == "entry"
+    assert obs[1]["tag"] == "entry"
+    assert obs[1]["protocol"] == "wireguard"
+
+    import sys
+    android_py = os.path.join(ROOT, "android", "app", "src", "main", "python")
+    if android_py not in sys.path:
+        sys.path.insert(0, android_py)
+    a_fl = load(os.path.join("android", "app", "src", "main", "python", "dastyab_flow.py"), "android_fl")
+    assert len(a_fl.parse_config_file_bytes("bulk.txt", "\n".join(
+        f"vless://55555555-5555-5555-5555-{i:012d}@192.0.2.{(i % 200) + 1}:{443 + i}?security=tls"
+        for i in range(619)
+    ).encode())) == 619
+    assert a_fl.build_config([{"proto": "wireguard", "addr": "h", "port": 1, "q": {}}], 10860) is None
+    a_cfg = a_fl.build_entry_exit_chain(warp_entry, exit_node, port=10860, fragment=True, fp="firefox")
+    assert a_cfg["outbounds"][0]["sockopt"]["dialerProxy"] == "entry"
+    assert a_cfg["outbounds"][0]["streamSettings"]["tlsSettings"]["fingerprint"] == "firefox"
+    assert a_cfg["outbounds"][1]["protocol"] == "wireguard"
+
+    import dastyab_terminal_shell as shell
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(shell._shim, "profile_dir", lambda: str(tmp_path / "prof"))
+    (tmp_path / "prof").mkdir(parents=True, exist_ok=True)
+    cnt = shell.sync_nodes([
+        "warp://privK%3D@162.159.192.1:2408?publickey=pubK%3D",
+        "trojan://pw@203.0.113.10:443?sni=a.example",
+    ])
+    assert cnt == 2
+    assert len(json.loads((tmp_path / "prof" / "fresh_vless.json").read_text())) == 2
+
+

@@ -442,8 +442,19 @@ pub fn render_any_xray_cfg(url: &str, socks_port: u16) -> Result<String, String>
         "vmess" => render_vmess_cfg(&uri, socks_port)?,
         "trojan" => render_trojan_cfg(&uri, socks_port)?,
         "ss" => render_ss_cfg(&uri, socks_port)?,
-        "hysteria2" => render_hysteria2_cfg(&uri, socks_port)?,
+        "hysteria2" | "hy2" | "hysteria" => render_hysteria2_cfg(&uri, socks_port)?,
         "tuic" => render_tuic_cfg(&uri, socks_port)?,
+        "wireguard" | "wg" | "warp" | "amneziawg" | "socks5" | "socks4" | "socks" | "http" => {
+            let hop = crate::tunnel::lion_warrior::parse_chain_hop(url)
+                .map_err(|e| format!("parse hop: {e}"))?;
+            let opts = crate::tunnel::lion_warrior::ChainDialOptions {
+                socks_port,
+                fragment_dpi: true,
+                ..Default::default()
+            };
+            return crate::tunnel::lion_warrior::build_xray_chain_config(&[hop], &opts)
+                .map_err(|e| format!("render chain: {e}"));
+        }
         other => return Err(format!("scheme '{other}' not deep-verifiable")),
     };
     serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize: {e}"))
@@ -498,7 +509,10 @@ fn stream_block(
         serde_json::Value::Null
     };
     let ws = if network == "ws" {
-        serde_json::json!({"path": q.get("path").cloned().unwrap_or_default(), "headers": {"Host": host}})
+        serde_json::json!({
+            "path": q.get("path").cloned().unwrap_or_default(),
+            "headers": {"Host": host}
+        })
     } else {
         serde_json::Value::Null
     };
@@ -508,7 +522,8 @@ fn stream_block(
         serde_json::Value::Null
     };
     let tcp = if network == "tcp" {
-        serde_json::json!({"header": {"type": q.get("type").cloned().unwrap_or_else(|| "none".into())}})
+        let hdr_type = q.get("type").cloned().unwrap_or_else(|| "none".into());
+        serde_json::json!({"header": {"type": hdr_type}})
     } else {
         serde_json::Value::Null
     };
@@ -619,7 +634,12 @@ fn render_ss_cfg(
     let outbound = serde_json::json!({
         "protocol": "shadowsocks",
         "settings": {
-            "servers": [{"address": uri.host, "port": uri.port, "method": method, "password": password}],
+            "servers": [{
+                "address": uri.host,
+                "port": uri.port,
+                "method": method,
+                "password": password,
+            }],
         },
         "streamSettings": stream_block(&net, &security, &q, &uri.host, &uri.host),
     });

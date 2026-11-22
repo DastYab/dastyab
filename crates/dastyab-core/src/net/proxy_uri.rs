@@ -102,6 +102,7 @@ impl ProxyUri {
             | "socks4" | "socks" | "sn" | "dnstt" | "slipnet" => {
                 parse_optional_userinfo_host(&mut out, rest)
             }
+            "http" => parse_explicit_http_proxy(&mut out, raw),
             "npv" | "npv4" | "napsternetv" => parse_napsternet(&mut out, rest),
             "ss" => parse_ss(&mut out, rest),
             "vmess" => parse_vmess(&mut out, rest),
@@ -525,25 +526,120 @@ fn parse_ssr(out: &mut ProxyUri, rest: &str) -> bool {
     true
 }
 
+/// Hosts belonging to web platforms / channel posts / release pages that must
+/// never be mistaken for HTTP proxy servers when scanning arbitrary `.txt` blobs.
+const WEB_NON_PROXY_HOSTS: &[&str] = &[
+    "t.me",
+    "telegram.me",
+    "github.com",
+    "raw.githubusercontent.com",
+    "gist.github.com",
+    "gitlab.com",
+    "youtube.com",
+    "youtu.be",
+    "twitter.com",
+    "x.com",
+    "instagram.com",
+    "facebook.com",
+    "google.com",
+    "support.google.com",
+    "docs.google.com",
+    "play.google.com",
+    "drive.google.com",
+    "reddit.com",
+    "medium.com",
+    "wikipedia.org",
+];
+
+/// Return true when an `http://` or `https://` URL is a web page / release /
+/// Telegram message link rather than an explicit HTTP proxy endpoint.
+pub fn is_non_proxy_http_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return false;
+    }
+    let Ok(url) = url::Url::parse(trimmed) else {
+        return true;
+    };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let host_low = host.to_ascii_lowercase();
+    if WEB_NON_PROXY_HOSTS
+        .iter()
+        .any(|d| host_low == *d || host_low.ends_with(&format!(".{d}")))
+    {
+        return true;
+    }
+    let has_explicit_port = url.port().is_some();
+    let has_userinfo = !url.username().is_empty() || url.password().is_some();
+    let path = url.path();
+    if (!path.is_empty() && path != "/") || url.query().is_some() {
+        return true;
+    }
+    !has_explicit_port && !has_userinfo
+}
+
+fn parse_explicit_http_proxy(out: &mut ProxyUri, raw: &str) -> bool {
+    if is_non_proxy_http_url(raw) {
+        return false;
+    }
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let port = match url.port() {
+        Some(p) if p > 0 => p,
+        _ => return false,
+    };
+    out.host = host.to_string();
+    out.port = port;
+    out.id = if !url.username().is_empty() {
+        format!("{}:{}", url.username(), url.password().unwrap_or(""))
+    } else {
+        format!("{host}:{port}")
+    };
+    true
+}
+
 /// Base64 decode with the usual encodings used in share-links (standard with
-/// padding, and URL-safe without padding). Returns `None` on failure.
+/// padding, unpadded, URL-safe, or whitespace-wrapped). Returns `None` on failure.
 fn b64_decode(s: &str) -> Option<String> {
-    let s = s.trim().trim_end_matches('#');
-    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-    let mut buf = String::with_capacity(s.len());
-    for engine in [&STANDARD, &URL_SAFE_NO_PAD] {
-        if let Ok(bytes) = engine.decode(s) {
+    let raw = s.trim().trim_end_matches('#');
+    let mut clean: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.is_empty() {
+        return None;
+    }
+    clean = clean.replace('-', "+").replace('_', "/");
+    let unpadded = clean.trim_end_matches('=');
+    let mut repadded = unpadded.to_string();
+    let rem = repadded.len() % 4;
+    if rem == 2 {
+        repadded.push_str("==");
+    } else if rem == 3 {
+        repadded.push('=');
+    }
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+    for cand in [clean.as_str(), unpadded, repadded.as_str()] {
+        if let Ok(bytes) = STANDARD.decode(cand) {
             if let Ok(text) = String::from_utf8(bytes) {
-                buf = text;
-                break;
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+        if let Ok(bytes) = STANDARD_NO_PAD.decode(cand) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                if !text.is_empty() {
+                    return Some(text);
+                }
             }
         }
     }
-    if buf.is_empty() {
-        None
-    } else {
-        Some(buf)
-    }
+    None
 }
 
 /// Public wrapper for share-link base64 decoding (used by xray config

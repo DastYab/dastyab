@@ -124,11 +124,27 @@ LOCAL_PROXY_PORTS = (
 
 MULTI_FORMAT_EXTS = frozenset((
     ".npv", ".npvt", ".npvs", ".npv4",
-    ".ovpn", ".openvpn",
-    ".conf", ".wg",
+    ".ovpn", ".ovpn2", ".openvpn",
+    ".conf", ".wg", ".awg", ".amneziawg", ".warp",
     ".hc", ".ehi", ".custom", ".dark", ".hat", ".tls", ".nm",
-    ".json", ".yaml", ".yml", ".sub", ".txt",
+    ".sbox", ".singbox", ".clash", ".mihomo", ".nekobox", ".hiddify",
+    ".xray", ".v2ray", ".prox", ".rules", ".tunnels", ".vpn", ".profile",
+    ".list", ".links", ".urls", ".nodes", ".servers", ".proxies",
+    ".ini", ".cfg", ".json", ".jsonc", ".yaml", ".yml", ".toml",
+    ".sub", ".txt", ".b64", ".base64",
 ))
+NOISE_CONFIG_FILENAMES = frozenset((
+    "robots.txt", "ads.txt", "humans.txt", "security.txt",
+    "license.txt", "changelog.txt", "readme.txt",
+))
+WEB_NON_PROXY_HOSTS = frozenset((
+    "t.me", "telegram.me", "telegram.dog", "github.com", "raw.githubusercontent.com",
+    "gist.github.com", "cdn.jsdelivr.net", "youtube.com", "youtu.be",
+    "twitter.com", "x.com", "instagram.com", "facebook.com", "google.com",
+    "aistudio.google.com", "flow.google.com", "support.google.com",
+    "cloudflare.com", "wikipedia.org", "reddit.com", "discord.gg", "discord.com",
+))
+MAX_CONFIG_FILE_BYTES = 8 * 1024 * 1024
 MUTABLE_FPS = ("chrome", "firefox", "random", "safari")
 _SIDECAR_PROCS = []
 
@@ -266,9 +282,29 @@ def parse_vless(line):
 
 
 def _b64_decode(raw):
-    raw = raw.strip().replace("-", "+").replace("_", "/")
+    raw = re.sub(r"\s+", "", raw or "").replace("-", "+").replace("_", "/")
     pad = (-len(raw)) % 4
     return base64.b64decode(raw + "=" * pad)
+
+
+def is_non_proxy_http_url(raw):
+    """Reject Telegram/GitHub/webpage http(s):// links so they are never treated as HTTP proxies."""
+    s = (raw or "").strip()
+    low = s.lower()
+    if not low.startswith(("http://", "https://")):
+        return False
+    try:
+        u = urllib.parse.urlparse(s)
+    except ValueError:
+        return True
+    host = (u.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or host in WEB_NON_PROXY_HOSTS or not u.port:
+        return True
+    if u.path not in ("", "/") or u.query:
+        return True
+    return False
 
 
 def _parse_host_port(hp):
@@ -393,7 +429,12 @@ def parse_node_uri(line):
                 "password": urllib.parse.unquote(pw),
                 "q": dict(urllib.parse.parse_qsl(qs))}
     if low.startswith(("socks5://", "socks://", "http://", "https://")):
-        u = urllib.parse.urlparse(s)
+        if low.startswith(("http://", "https://")) and is_non_proxy_http_url(s):
+            return None
+        try:
+            u = urllib.parse.urlparse(s)
+        except ValueError:
+            return None
         if not u.hostname or not u.port:
             return None
         return {
@@ -475,51 +516,176 @@ def _extract_ovpn_proxy_nodes(text):
     return out
 
 
+def _clash_vals_to_node(vals):
+    t = vals.get("type", "").lower()
+    host = vals.get("server", "")
+    try:
+        port = int(vals.get("port", 0))
+    except ValueError:
+        return None
+    if not host or not (1 <= port <= 65535) or host in ("127.0.0.1", "0.0.0.0"):
+        return None
+    if t == "vless" and vals.get("uuid"):
+        return {"proto": "vless", "addr": host, "port": port, "uuid": vals["uuid"],
+                "q": {"security": "tls" if vals.get("tls") == "true" else "none",
+                      "sni": vals.get("servername") or vals.get("sni", ""),
+                      "type": vals.get("network", "tcp"),
+                      "fp": vals.get("client-fingerprint", "chrome")}}
+    if t == "vmess" and vals.get("uuid"):
+        return {"proto": "vmess", "addr": host, "port": port, "uuid": vals["uuid"],
+                "q": {"security": "tls" if vals.get("tls") == "true" else "none",
+                      "sni": vals.get("servername") or vals.get("sni", ""),
+                      "type": vals.get("network", "tcp")}}
+    if t == "trojan" and vals.get("password"):
+        return {"proto": "trojan", "addr": host, "port": port, "password": vals["password"],
+                "q": {"security": "tls", "sni": vals.get("sni", ""), "type": vals.get("network", "tcp")}}
+    if t in ("ss", "shadowsocks") and vals.get("password"):
+        return {"proto": "ss", "addr": host, "port": port,
+                "method": vals.get("cipher", "aes-256-gcm"), "password": vals["password"], "q": {}}
+    if t == "wireguard" and vals.get("private-key") and vals.get("public-key"):
+        return {"proto": "wireguard", "addr": host, "port": port,
+                "secret": vals["private-key"],
+                "q": {"publickey": vals["public-key"], "address": vals.get("ip", "172.16.0.2/32")}}
+    if t in ("hy2", "hysteria2") and vals.get("password"):
+        return {"proto": "hy2", "addr": host, "port": port, "password": vals["password"],
+                "q": {"sni": vals.get("sni", "")}}
+    if t == "tuic" and vals.get("uuid"):
+        return {"proto": "tuic", "addr": host, "port": port, "uuid": vals["uuid"],
+                "password": vals.get("password", ""), "q": {"sni": vals.get("sni", "")}}
+    if t in ("socks5", "http"):
+        return {"proto": "socks" if t == "socks5" else "http", "addr": host, "port": port, "q": {}}
+    return None
+
+
 def _extract_clash_yaml_nodes(text):
-    """Lightweight stdlib Clash/Mihomo `proxies:` extractor."""
+    """Lightweight stdlib Clash/Mihomo `proxies:` extractor (inline `{...}` & multi-line blocks)."""
     if "proxies:" not in text or "server:" not in text:
         return []
     out = []
-    blocks = re.split(r"\n\s*-\s+(?=\{|name:|type:)", text)
-    kv_re = re.compile(r"([A-Za-z0-9_-]+)\s*:\s*(\"[^\"]*\"|'[^']*'|[^,\}\n]+)")
-    for blk in blocks[1:]:
-        vals = {k.lower(): v.strip().strip("\"'") for k, v in kv_re.findall(blk)}
-        t = vals.get("type", "").lower()
-        host = vals.get("server", "")
-        try:
-            port = int(vals.get("port", 0))
-        except ValueError:
+    kv_re = re.compile(r"([A-Za-z0-9_-]+)\s*:\s*(\"[^\"]*\"|'[^']*'|[^,\}\n#]+)")
+    lines = text.splitlines()
+    in_proxies = False
+    cur = {}
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if not host or not (1 <= port <= 65535) or host in ("127.0.0.1", "0.0.0.0"):
+        if stripped.startswith("proxies:"):
+            in_proxies = True
             continue
-        if t == "vless" and vals.get("uuid"):
-            out.append({"proto": "vless", "addr": host, "port": port, "uuid": vals["uuid"],
-                        "q": {"security": "tls" if vals.get("tls") == "true" else "none",
-                              "sni": vals.get("servername") or vals.get("sni", ""),
-                              "type": vals.get("network", "tcp")}})
-        elif t == "vmess" and vals.get("uuid"):
-            out.append({"proto": "vmess", "addr": host, "port": port, "uuid": vals["uuid"],
-                        "q": {"security": "tls" if vals.get("tls") == "true" else "none",
-                              "sni": vals.get("servername") or vals.get("sni", ""),
-                              "type": vals.get("network", "tcp")}})
-        elif t == "trojan" and vals.get("password"):
-            out.append({"proto": "trojan", "addr": host, "port": port, "password": vals["password"],
-                        "q": {"security": "tls", "sni": vals.get("sni", ""), "type": vals.get("network", "tcp")}})
-        elif t in ("ss", "shadowsocks") and vals.get("password"):
-            out.append({"proto": "ss", "addr": host, "port": port,
-                        "method": vals.get("cipher", "aes-256-gcm"), "password": vals["password"], "q": {}})
-        elif t == "wireguard" and vals.get("private-key") and vals.get("public-key"):
-            out.append({"proto": "wireguard", "addr": host, "port": port,
-                        "secret": vals["private-key"],
-                        "q": {"publickey": vals["public-key"], "address": vals.get("ip", "172.16.0.2/32")}})
-        elif t in ("hy2", "hysteria2") and vals.get("password"):
-            out.append({"proto": "hy2", "addr": host, "port": port, "password": vals["password"],
-                        "q": {"sni": vals.get("sni", "")}})
-        elif t == "tuic" and vals.get("uuid"):
-            out.append({"proto": "tuic", "addr": host, "port": port, "uuid": vals["uuid"],
-                        "password": vals.get("password", ""), "q": {"sni": vals.get("sni", "")}})
-        elif t in ("socks5", "http"):
-            out.append({"proto": "socks" if t == "socks5" else "http", "addr": host, "port": port, "q": {}})
+        if in_proxies and not raw[:1].isspace() and not stripped.startswith("-") and ":" in stripped:
+            break
+        if not in_proxies:
+            continue
+        if stripped.startswith("-"):
+            if cur:
+                node = _clash_vals_to_node(cur)
+                if node:
+                    out.append(node)
+                cur = {}
+            after = stripped[1:].strip()
+            if after.startswith("{"):
+                vals = {k.lower(): v.strip().strip("\"'") for k, v in kv_re.findall(after)}
+                node = _clash_vals_to_node(vals)
+                if node:
+                    out.append(node)
+            else:
+                for k, v in kv_re.findall(after):
+                    cur[k.lower()] = v.strip().strip("\"'")
+        elif cur or ":" in stripped:
+            for k, v in kv_re.findall(stripped):
+                cur[k.lower()] = v.strip().strip("\"'")
+    if cur:
+        node = _clash_vals_to_node(cur)
+        if node:
+            out.append(node)
+    return out
+
+
+def _extract_json_nodes(raw_txt):
+    """Extract Sing-Box, Xray, and Clash/v2rayN JSON outbound nodes."""
+    cleaned = re.sub(r"(?m)^\s*//.*$", "", raw_txt or "").lstrip()
+    if not cleaned.startswith(("{", "[")):
+        return []
+    try:
+        doc = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return []
+    items = doc.get("outbounds", []) if isinstance(doc, dict) else (doc if isinstance(doc, list) else [])
+    if isinstance(doc, dict) and not items and doc.get("add") and doc.get("port") and doc.get("id"):
+        items = [{"type": "vmess", "server": doc["add"], "server_port": doc["port"], "uuid": doc["id"],
+                  "tls": {"enabled": doc.get("tls") == "tls", "server_name": doc.get("sni", "")}}]
+    if not isinstance(items, list):
+        return []
+    out = []
+    for ob in items:
+        if not isinstance(ob, dict):
+            continue
+        t = (ob.get("type") or ob.get("protocol") or "").lower()
+        if t in ("direct", "block", "dns", "freedom", "blackhole", "selector", "urltest"):
+            continue
+        host = ob.get("server") or ""
+        port = ob.get("server_port") or 0
+        if host and port:
+            if t == "vless" and ob.get("uuid"):
+                tls_o = ob.get("tls") or {}
+                out.append({"proto": "vless", "addr": host, "port": int(port), "uuid": ob["uuid"],
+                            "q": {"security": "tls" if tls_o.get("enabled") else "none",
+                                  "sni": tls_o.get("server_name", "")}})
+            elif t == "vmess" and ob.get("uuid"):
+                tls_o = ob.get("tls") or {}
+                out.append({"proto": "vmess", "addr": host, "port": int(port), "uuid": ob["uuid"],
+                            "q": {"security": "tls" if tls_o.get("enabled") else "none",
+                                  "sni": tls_o.get("server_name", "")}})
+            elif t == "trojan" and ob.get("password"):
+                out.append({"proto": "trojan", "addr": host, "port": int(port),
+                            "password": ob["password"], "q": {"security": "tls"}})
+            elif t in ("shadowsocks", "ss") and ob.get("password"):
+                out.append({"proto": "ss", "addr": host, "port": int(port),
+                            "method": ob.get("method", "aes-256-gcm"),
+                            "password": ob["password"], "q": {}})
+            elif t == "wireguard" and ob.get("private_key") and ob.get("peer_public_key"):
+                out.append({"proto": "wireguard", "addr": host, "port": int(port),
+                            "secret": ob["private_key"], "q": {"publickey": ob["peer_public_key"]}})
+            elif t in ("hy2", "hysteria2") and ob.get("password"):
+                out.append({"proto": "hy2", "addr": host, "port": int(port),
+                            "password": ob["password"], "q": {}})
+            elif t == "tuic" and ob.get("uuid"):
+                out.append({"proto": "tuic", "addr": host, "port": int(port),
+                            "uuid": ob["uuid"], "password": ob.get("password", ""), "q": {}})
+            elif t in ("socks", "http"):
+                out.append({"proto": t, "addr": host, "port": int(port), "q": {}})
+            continue
+        sett = ob.get("settings") if isinstance(ob.get("settings"), dict) else {}
+        ss = ob.get("streamSettings") if isinstance(ob.get("streamSettings"), dict) else {}
+        sec = ss.get("security", "none")
+        tls_s = ss.get("tlsSettings") or ss.get("realitySettings") or {}
+        sni = tls_s.get("serverName", "") if isinstance(tls_s, dict) else ""
+        if t in ("vless", "vmess") and isinstance(sett.get("vnext"), list) and sett["vnext"]:
+            vn = sett["vnext"][0]
+            users = vn.get("users") or [{}]
+            uid = users[0].get("id") if users else ""
+            if vn.get("address") and vn.get("port") and uid:
+                out.append({"proto": t, "addr": vn["address"], "port": int(vn["port"]), "uuid": uid,
+                            "q": {"security": sec, "sni": sni, "type": ss.get("network", "tcp")}})
+        elif t in ("trojan", "shadowsocks", "socks", "http") and isinstance(sett.get("servers"), list) and sett["servers"]:
+            sv = sett["servers"][0]
+            if sv.get("address") and sv.get("port"):
+                p_norm = "ss" if t == "shadowsocks" else t
+                node = {"proto": p_norm, "addr": sv["address"], "port": int(sv["port"]),
+                        "password": sv.get("password", ""), "q": {"security": sec, "sni": sni}}
+                if p_norm == "ss":
+                    node["method"] = sv.get("method", "aes-256-gcm")
+                out.append(node)
+        elif t == "wireguard" and sett.get("secretKey") and isinstance(sett.get("peers"), list) and sett["peers"]:
+            peer = sett["peers"][0]
+            hp = _parse_host_port(peer.get("endpoint", ""))
+            if hp[0] and hp[1] and peer.get("publicKey"):
+                addrs = sett.get("address") or ["172.16.0.2/32"]
+                out.append({"proto": "wireguard", "addr": hp[0], "port": hp[1],
+                            "secret": sett["secretKey"],
+                            "q": {"publickey": peer["publicKey"],
+                                  "address": ",".join(addrs) if isinstance(addrs, list) else str(addrs)}})
     return out
 
 
@@ -529,12 +695,22 @@ _URI_SCAN_RE = re.compile(
 )
 
 
+def _decode_config_bytes(raw):
+    if raw.startswith(b"\xff\xfe"):
+        return raw[2:].decode("utf-16-le", "replace")
+    if raw.startswith(b"\xfe\xff"):
+        return raw[2:].decode("utf-16-be", "replace")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", "replace")
+    return raw.decode("utf-8", "replace")
+
+
 def parse_config_file_bytes(filename, raw):
-    """Unpack multi-format VPN/proxy configs (.npv*, .ovpn, .conf/.wg, .hc/.ehi, .json, .yaml, .sub/.txt)."""
-    if not raw or len(raw) > 2 * 1024 * 1024:
+    """Unpack multi-format VPN/proxy configs (.txt, .npv*, .ovpn, .conf/.wg/.awg, .hc/.ehi, .json, .yaml, .sub)."""
+    if not raw or len(raw) > MAX_CONFIG_FILE_BYTES:
         return []
     ext = os.path.splitext(filename or "")[1].lower()
-    raw_txt = raw.decode("utf-8", "replace")
+    raw_txt = _decode_config_bytes(raw)
     low_head = raw_txt.lstrip()[:120].lower()
     if low_head.startswith("<!doctype html") or low_head.startswith("<html"):
         return []
@@ -546,72 +722,58 @@ def parse_config_file_bytes(filename, raw):
         if printable_runs:
             corpus = raw_txt + "\n" + "\n".join(printable_runs)
 
-    if ext in ("", ".sub", ".txt", ".npv", ".npvt", ".npvs", ".npv4"):
-        compact = re.sub(r"\s+", "", corpus)
-        if 16 <= len(compact) <= 512_000 and re.fullmatch(r"[A-Za-z0-9+/=_-]+", compact):
+    b64_exts = frozenset((
+        "", ".sub", ".txt", ".b64", ".base64", ".list", ".links", ".urls",
+        ".nodes", ".servers", ".proxies", ".npv", ".npvt", ".npvs", ".npv4",
+    ))
+    if ext in b64_exts:
+        cur_full = corpus
+        for _ in range(3):
+            compact = re.sub(r"\s+", "", cur_full)
+            if not (16 <= len(compact) <= 2_000_000 and re.fullmatch(r"[A-Za-z0-9+/=_-]+", compact)):
+                break
             try:
                 dec = _b64_decode(compact).decode("utf-8", "replace")
-                if "://" in dec or "[Peer]" in dec or '"outbounds"' in dec:
-                    corpus += "\n" + dec
             except Exception:
-                pass
-        for b64_tok in re.findall(r"[A-Za-z0-9+/=_-]{28,}", corpus)[:30]:
-            try:
-                dec = _b64_decode(b64_tok).decode("utf-8", "replace")
-                if "://" in dec or "[Peer]" in dec or '"outbounds"' in dec:
+                break
+            dec_compact = re.sub(r"\s+", "", dec)
+            is_cfg = any(m in dec for m in ("://", "[Peer]", '"outbounds"', "proxies:"))
+            is_b64_next = 16 <= len(dec_compact) <= 2_000_000 and bool(re.fullmatch(r"[A-Za-z0-9+/=_-]+", dec_compact))
+            if is_cfg:
+                corpus += "\n" + dec
+                cur_full = dec
+            elif is_b64_next:
+                cur_full = dec
+            else:
+                break
+        for b64_tok in re.findall(r"[A-Za-z0-9+/=_-]{28,}", corpus)[:256]:
+            cur_tok = b64_tok
+            for _ in range(3):
+                try:
+                    dec = _b64_decode(cur_tok).decode("utf-8", "replace")
+                except Exception:
+                    break
+                dec_compact = re.sub(r"\s+", "", dec)
+                if any(m in dec for m in ("://", "[Peer]", '"outbounds"', "proxies:")):
                     corpus += "\n" + dec
-            except Exception:
-                pass
+                if 24 <= len(dec_compact) and re.fullmatch(r"[A-Za-z0-9+/=_-]+", dec_compact):
+                    cur_tok = dec_compact
+                else:
+                    break
 
     nodes = []
     for m in _URI_SCAN_RE.findall(corpus):
-        u = parse_node_uri(m.rstrip(",;.)]}"))
+        cleaned = m.rstrip(",;.)]}\u200c\u200d\u200e\u200f")
+        u = parse_node_uri(cleaned)
         if u:
             nodes.append(u)
     nodes.extend(_extract_wg_ini_nodes(corpus))
     nodes.extend(_extract_ovpn_proxy_nodes(corpus))
     nodes.extend(_extract_clash_yaml_nodes(corpus))
 
-    if ext == ".json" or raw_txt.lstrip().startswith(("{", "[")):
-        try:
-            doc = json.loads(raw_txt)
-        except json.JSONDecodeError:
-            doc = None
-        if isinstance(doc, dict) or isinstance(doc, list):
-            items = doc.get("outbounds", []) if isinstance(doc, dict) else doc
-            if isinstance(items, list):
-                for ob in items:
-                    if not isinstance(ob, dict):
-                        continue
-                    t = (ob.get("type") or ob.get("protocol") or "").lower()
-                    host = ob.get("server") or ""
-                    port = ob.get("server_port") or 0
-                    if host and port:
-                        if t == "vless" and ob.get("uuid"):
-                            tls_o = ob.get("tls") or {}
-                            nodes.append({"proto": "vless", "addr": host, "port": int(port),
-                                          "uuid": ob["uuid"],
-                                          "q": {"security": "tls" if tls_o.get("enabled") else "none",
-                                                "sni": tls_o.get("server_name", "")}})
-                        elif t == "trojan" and ob.get("password"):
-                            nodes.append({"proto": "trojan", "addr": host, "port": int(port),
-                                          "password": ob["password"], "q": {"security": "tls"}})
-                        elif t == "shadowsocks" and ob.get("password"):
-                            nodes.append({"proto": "ss", "addr": host, "port": int(port),
-                                          "method": ob.get("method", "aes-256-gcm"),
-                                          "password": ob["password"], "q": {}})
-                        elif t == "wireguard" and ob.get("private_key") and ob.get("peer_public_key"):
-                            nodes.append({"proto": "wireguard", "addr": host, "port": int(port),
-                                          "secret": ob["private_key"],
-                                          "q": {"publickey": ob["peer_public_key"]}})
-                        elif t in ("hy2", "hysteria2") and ob.get("password"):
-                            nodes.append({"proto": "hy2", "addr": host, "port": int(port),
-                                          "password": ob["password"], "q": {}})
-                        elif t == "tuic" and ob.get("uuid"):
-                            nodes.append({"proto": "tuic", "addr": host, "port": int(port),
-                                          "uuid": ob["uuid"], "password": ob.get("password", ""), "q": {}})
-                        elif t in ("socks", "http"):
-                            nodes.append({"proto": t, "addr": host, "port": int(port), "q": {}})
+    if ext in (".json", ".jsonc", ".sbox", ".singbox", ".nekobox", ".hiddify", ".xray", ".v2ray") or raw_txt.lstrip().startswith(("{", "[")):
+        nodes.extend(_extract_json_nodes(raw_txt))
+
     seen, unique = set(), []
     for n in nodes:
         k = (n.get("proto"), n.get("addr"), n.get("port"),
@@ -624,15 +786,20 @@ def parse_config_file_bytes(filename, raw):
 
 def gather_multi_format_candidates(dirs=None):
     """Scan local vaults, Downloads, and third-party VPN client dirs for multi-format configs."""
+    cur_home = os.environ.get("HOME") or HOME
+    cur_prof = PROFILE_DIR if cur_home == HOME else os.path.join(cur_home, ".dastyab/profiles/default")
     scan_dirs = list(dirs) if dirs is not None else [
-        PROFILE_DIR,
-        os.path.join(HOME, ".dastyab/vault"),
-        os.path.join(HOME, "Downloads"),
-        os.path.join(HOME, ".config/sing-box"),
-        os.path.join(HOME, ".config/clash"),
-        os.path.join(HOME, ".config/mihomo"),
-        os.path.join(HOME, ".config/v2rayN"),
-        os.path.join(HOME, ".config/openvpn"),
+        cur_prof,
+        os.path.join(cur_prof, "imports"),
+        os.path.join(cur_prof, "downloads"),
+        os.path.join(cur_prof, "harvested"),
+        os.path.join(cur_home, ".dastyab/vault"),
+        os.path.join(cur_home, "Downloads"),
+        os.path.join(cur_home, ".config/sing-box"),
+        os.path.join(cur_home, ".config/clash"),
+        os.path.join(cur_home, ".config/mihomo"),
+        os.path.join(cur_home, ".config/v2rayN"),
+        os.path.join(cur_home, ".config/openvpn"),
     ]
     extra_env = os.environ.get("DASTYAB_CONFIG_DIRS", "")
     if extra_env and dirs is None:
@@ -646,7 +813,9 @@ def gather_multi_format_candidates(dirs=None):
             entries = sorted(os.listdir(d))
         except OSError:
             continue
-        for fname in entries[:80]:
+        for fname in entries[:500]:
+            if fname.lower() in NOISE_CONFIG_FILENAMES:
+                continue
             ext = os.path.splitext(fname)[1].lower()
             if ext not in MULTI_FORMAT_EXTS:
                 continue
@@ -654,7 +823,7 @@ def gather_multi_format_candidates(dirs=None):
             if not os.path.isfile(fpath):
                 continue
             try:
-                if os.path.getsize(fpath) > 2 * 1024 * 1024:
+                if os.path.getsize(fpath) > MAX_CONFIG_FILE_BYTES:
                     continue
                 with open(fpath, "rb") as fh:
                     collected.extend(parse_config_file_bytes(fname, fh.read()))
@@ -732,7 +901,7 @@ def discover_local_proxies(timeout=0.18):
     return found
 
 
-def load_candidates(limit=400):
+def load_candidates(limit=4096):
     """Union every node source & multi-format vault, dedup by (addr, port), best-first."""
     out, seen = [], set()
 
@@ -997,6 +1166,12 @@ def build_config(nodes, port, fragment=False, allow_sidecar=False):
                           "settings": {"auth": "noauth", "udp": True},
                           "tag": "socks-in"}],
             "outbounds": outbounds}
+
+
+def build_entry_exit_chain(entry, exit_node, port=SOCK, fragment=True, fp="chrome"):
+    """Build PattNG-style Entry (WARP/WireGuard/Proxy) -> Exit config with fragment + fingerprint."""
+    ex = mutate_fp(exit_node, fp) if fp else dict(exit_node)
+    return build_config([ex, entry], port=port, fragment=fragment, allow_sidecar=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1351,7 +1526,17 @@ def save_pool(passing):
 
 def _try_nodes(nodes, want_country=None, fragment=False, strict_clean=False):
     """Bring one route up, gate it, tear it down. Return gates or None."""
-    pid = bring_up(nodes, fragment=fragment)
+    bridged = []
+    for srv in nodes:
+        if srv.get("proto") in ("hy2", "hysteria2", "tuic"):
+            b = _spawn_singbox_sidecar(srv)
+            if b is None:
+                stop(quiet=True)
+                return None
+            bridged.append(b)
+        else:
+            bridged.append(srv)
+    pid = bring_up(bridged, fragment=fragment)
     if pid is None:
         return None
     try:
@@ -1890,29 +2075,47 @@ def cmd_watch(interval=30):
             return 0
 
 
-def cmd_build_pool(uris_txt, want=6):
-    if not os.path.isfile(uris_txt):
-        raise SystemExit(f"[flow] No such URI file: {uris_txt}")
+def _resolve_entry_arg(entry_spec):
+    if not entry_spec:
+        return None
+    if os.path.isfile(entry_spec):
+        with open(entry_spec, "rb") as fh:
+            nodes = parse_config_file_bytes(entry_spec, fh.read())
+        return nodes[0] if nodes else None
+    return parse_node_uri(entry_spec)
+
+
+def _load_nodes_from_file(path):
+    if not os.path.isfile(path):
+        raise SystemExit(f"[flow] No such URI/config file: {path}")
     try:
-        with open(uris_txt, "rb") as bfh:
+        with open(path, "rb") as bfh:
             raw_bytes = bfh.read()
     except OSError as e:
-        raise SystemExit(f"[flow] Cannot read {uris_txt}: {e}")
+        raise SystemExit(f"[flow] Cannot read {path}: {e}")
     uris, seen = [], set()
-    for u in parse_config_file_bytes(uris_txt, raw_bytes):
-        key = (u["addr"], u["port"])
+    for u in parse_config_file_bytes(path, raw_bytes):
+        key = (u["addr"], u["port"], u.get("proto", "vless"))
         if key not in seen:
             seen.add(key)
             uris.append(u)
+    return uris
+
+
+def cmd_build_pool(uris_txt, want=6, entry_spec=None):
+    uris = _load_nodes_from_file(uris_txt)
     if not uris:
         raise SystemExit(f"[flow] No proxy URIs found in {uris_txt}")
-    print(f"[flow] {len(uris)} unique URI(s); testing up to 30 for a pool of {want} ...")
+    entry_node = _resolve_entry_arg(entry_spec) if entry_spec else None
+    probe_limit = max(len(uris), want) if len(uris) <= 200 else 200
+    print(f"[flow] {len(uris)} unique URI(s); testing up to {probe_limit} for a pool of {want} ...")
     passing = []
-    for u in uris[:30]:
-        g = _try_nodes([u])
+    for u in uris[:probe_limit]:
+        nodes = [u, entry_node] if entry_node else [u]
+        g = _try_nodes(nodes, fragment=bool(entry_node))
         if g and g["verdict"]:
             print(f"   {u['addr']}:{u['port']}  OK  {g['country']} {g['egress']}", flush=True)
-            passing.append({"nodes": [u], "egress": g["egress"],
+            passing.append({"nodes": nodes, "fragment": bool(entry_node), "egress": g["egress"],
                             "country": g["country"],
                             "country_name": g["country_name"],
                             "proxy": g["proxy"], "hosting": g["hosting"],
@@ -2051,13 +2254,19 @@ def main():
     p.add_argument("--try", dest="try_n", type=int, default=10)
     p.add_argument("--hops", type=int, default=8, choices=tuple(range(1, 9)))
     p.add_argument("--country", default=None)
+    p.add_argument("--entry", default=None)
     p.add_argument("--strict", action="store_true")
 
     p = sub.add_parser("watch", help="self-healing watchdog")
     p.add_argument("interval", nargs="?", type=int, default=30)
 
-    p = sub.add_parser("build-pool", help="build the pool from proxy cards")
-    p.add_argument("uris", help="file with one proxy URI per line")
+    p = sub.add_parser("build-pool", help="build the pool from .txt or any config file")
+    p.add_argument("uris", help="file with share URIs, Clash YAML, WireGuard, Sing-Box, or .npv*/.ovpn/.txt")
+    p.add_argument("--entry", default=None, help="optional PattNG entry proxy/WARP URI or file")
+
+    p = sub.add_parser("ingest", help="parse and save all nodes from .txt or any config file")
+    p.add_argument("uris", help="path to .txt, .sub, .yaml, .json, .conf, .ovpn, .npvt, etc.")
+    p.add_argument("--entry", default=None, help="optional PattNG entry proxy/WARP URI or file")
 
     p = sub.add_parser("prove", help="prove Flow access in a real browser (decisive)")
     p.add_argument("--try", dest="try_n", type=int, default=6)
@@ -2081,11 +2290,43 @@ def main():
     if cmd == "verify":
         return cmd_verify(a.country)
     if cmd == "best":
+        cands = load_candidates()
+        if getattr(a, "entry", None):
+            en = _resolve_entry_arg(a.entry)
+            if en:
+                passing = []
+                for ex in cands[:a.try_n]:
+                    g = _try_nodes([ex, en], a.country, fragment=True, strict_clean=a.strict)
+                    if g and g["verdict"]:
+                        passing.append({"nodes": [ex, en], "fragment": True, "stage": "pattng-entry-exit",
+                                        "egress": g["egress"], "country": g["country"],
+                                        "country_name": g["country_name"], "proxy": g["proxy"],
+                                        "hosting": g["hosting"], "clean_score": g.get("clean_score", 0),
+                                        "latency_ms": g["latency_ms"], "checked_epoch": time.time()})
+                if passing:
+                    save_pool(passing)
+                    return 0
+                return 3
         return cmd_best(a.try_n, a.country, a.hops, a.strict)
     if cmd == "watch":
         return cmd_watch(a.interval)
     if cmd == "build-pool":
-        cmd_build_pool(a.uris)
+        cmd_build_pool(a.uris, entry_spec=getattr(a, "entry", None))
+        return 0
+    if cmd == "ingest":
+        nodes = _load_nodes_from_file(a.uris)
+        if not nodes:
+            raise SystemExit(f"[flow] No proxy URIs found in {a.uris}")
+        en = _resolve_entry_arg(getattr(a, "entry", None))
+        entries = [
+            {"nodes": [u, en] if en else [u], "fragment": bool(en),
+             "egress": "pending", "country": "??", "country_name": "Imported",
+             "proxy": False, "hosting": False, "clean_score": 0, "latency_ms": 0,
+             "checked_epoch": time.time()}
+            for u in nodes
+        ]
+        save_pool(entries)
+        print(f"[flow] Imported {len(entries)} route(s) from {a.uris} -> {FLOW_POOL}")
         return 0
     if cmd == "prove":
         return cmd_prove(a.try_n, a.country, a.profile)

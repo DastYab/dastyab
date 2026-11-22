@@ -157,10 +157,14 @@ fn render_overview(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
 
     let mut total_clean = 0usize;
     let mut total_configs = 0usize;
+    let mut total_pool_nodes = 0usize;
     for m in &profiles {
         let p = load_profile(&m.id);
         total_clean += p.clean_ips.len();
         total_configs += p.history.len();
+        total_pool_nodes += dastyab_core::artifact::config_store::load_node_store(&m.id)
+            .nodes
+            .len();
     }
 
     lines.push(Line::raw(""));
@@ -169,7 +173,7 @@ fn render_overview(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         Style::default().fg(GOLD),
     )));
     lines.push(Line::from(Span::styled(
-        format!("Saved configs: {total_configs}"),
+        format!("Saved configs: {total_configs}   Imported pool: {total_pool_nodes}"),
         Style::default().fg(TEXT),
     )));
     lines.push(Line::from(Span::styled(
@@ -233,10 +237,11 @@ fn render_links(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
 
     for m in profiles.iter().take(1) {
         let p = load_profile(&m.id);
+        let pool = dastyab_core::artifact::config_store::load_node_store(&m.id);
         let recent: Vec<_> = p.history.iter().take(6).collect();
-        if recent.is_empty() {
+        if recent.is_empty() && pool.nodes.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No share links yet — run `dastyab deploy` then `dastyab scan`.",
+                "No share links yet — run `dastyab deploy` or `dastyab configs import --path <file.txt>`.",
                 Style::default().fg(TEXT),
             )));
         } else {
@@ -275,6 +280,17 @@ fn render_links(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
                         Style::default().fg(GOLD_DIM),
                     )));
                 }
+            }
+            for node in pool.nodes.iter().take(6) {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("[{}] ", node.source), Style::default().fg(GOLD)),
+                    Span::styled(node.alias.clone(), Style::default().fg(TEXT)),
+                ]));
+                let clipped: String = node.url.chars().take(90).collect();
+                lines.push(Line::from(Span::styled(
+                    clipped,
+                    Style::default().fg(GOLD_DIM),
+                )));
             }
         }
     }

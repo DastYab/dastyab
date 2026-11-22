@@ -462,3 +462,106 @@ def test_lion_eight_hop_and_wireguard_outbound(ai):
     assert obs[7]["settings"]["secretKey"] == "priv"
     assert obs[0]["streamSettings"]["tlsSettings"]["fingerprint"] == "firefox"
 
+
+def test_telegram_619_txt_drop_and_non_proxy_url_filtering(ai):
+    header = (
+        "داخل فایل 619 عدد سرور از تمام کشورها هست ری اکشن فراموش نکنید\n"
+        "مخابرات و تمام اپراتورها\n"
+        "بااین برنامه اجرا کنید PattNG (https://t.me/proxy_kafee/48582?single)👉👉 کیلیک کنید\n"
+        "#ویتوری #v2box\n#pattNG\n@proxy_kafee\n"
+        "PattNG 2.3.10-P62\nآپدیت جدید کلاینت\n"
+        "امکان chain کردن پروکسی های دیگر به کانفیگ اتر (وارپ):\n"
+        "🔗لینک دانلود نسخه جدید\n"
+        "https://github.com/patterniha/PattNG/releases/tag/2.3.8-P50\n"
+        "🔺آموزش fragment+fingerprint (https://t.me/proxy_kafee/46097)\n"
+        "@proxy_kafee\n"
+    )
+    servers = []
+    for i in range(619):
+        if i % 3 == 0:
+            servers.append(f"vless://11111111-1111-1111-1111-{i:012d}@198.51.100.{(i % 250) + 1}:{443 + (i % 50)}?security=tls&type=ws#DE_{i}")
+        elif i % 3 == 1:
+            servers.append(f"trojan://pw{i}@203.0.113.{(i % 250) + 1}:{1000 + i}?sni=cdn.example#US_{i}")
+        else:
+            servers.append(f"hy2://pw{i}@192.0.2.{(i % 250) + 1}:{2000 + i}?sni=hy.example#NL_{i}")
+    payload = (header + "\n".join(servers)).encode("utf-8")
+    nodes = ai.parse_config_file_bytes("servers_619.txt", payload)
+    assert len(nodes) == 619
+    assert not any(n["addr"] in ("t.me", "github.com") for n in nodes)
+
+
+def test_all_extensions_utf16_clash_block_xray_json_and_nested_b64(ai, tmp_path, monkeypatch):
+    import base64
+    block_yaml = (
+        "proxies:\n"
+        "  - name: block-vless\n"
+        "    type: vless\n"
+        "    server: 198.51.100.51\n"
+        "    port: 443\n"
+        "    uuid: uid-block\n"
+        "    tls: true\n"
+        "    network: ws\n"
+        "    servername: sni.example\n"
+        "    client-fingerprint: firefox\n"
+    ).encode("utf-16-le")
+    nodes_yaml = ai.parse_config_file_bytes("pack.mihomo", b"\xff\xfe" + block_yaml)
+    assert len(nodes_yaml) == 1
+    assert nodes_yaml[0]["addr"] == "198.51.100.51"
+    assert nodes_yaml[0]["q"]["fp"] == "firefox"
+
+    xray_json = json.dumps({
+        "outbounds": [
+            {"protocol": "vless", "settings": {"vnext": [{"address": "203.0.113.52", "port": 8443, "users": [{"id": "xr-1"}]}]},
+             "streamSettings": {"security": "tls", "network": "grpc", "tlsSettings": {"serverName": "g.example"}}},
+            {"protocol": "freedom", "tag": "direct"},
+        ]
+    }).encode()
+    nodes_json = ai.parse_config_file_bytes("cfg.sbox", xray_json)
+    assert len(nodes_json) == 1 and nodes_json[0]["addr"] == "203.0.113.52"
+
+    inner = "vless://22222222-2222-2222-2222-222222222222@192.0.2.53:443?security=tls\n"
+    nested = base64.b64encode(base64.b64encode(inner.encode())).decode().encode()
+    nodes_b64 = ai.parse_config_file_bytes("sub.b64", nested)
+    assert len(nodes_b64) == 1 and nodes_b64[0]["addr"] == "192.0.2.53"
+
+    imp = tmp_path / "imports"
+    imp.mkdir()
+    (imp / "robots.txt").write_text("http://203.0.113.99:8080\n")
+    (imp / "nodes.list").write_text("trojan://pw@203.0.113.55:443?sni=x.example\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Force _paths() lookup under tmp_path if using gather_multi_format_candidates
+    prof = tmp_path / ".dastyab" / "profiles" / "default" / "imports"
+    prof.mkdir(parents=True)
+    (prof / "robots.txt").write_text("http://203.0.113.99:8080\n")
+    (prof / "nodes.awg").write_text("[Interface]\nPrivateKey = p1=\n[Peer]\nPublicKey = k1=\nEndpoint = 198.51.100.70:51820\n")
+    gathered = ai.gather_multi_format_candidates()
+    addrs = {n["addr"] for n in gathered}
+    assert "198.51.100.70" in addrs
+    assert "203.0.113.99" not in addrs
+
+
+def test_pattng_warp_entry_exit_chain_and_android_parity(ai):
+    warp_entry = ai.parse_node_uri("warp://privKey%3D@162.159.192.1:2408?publickey=bmXOC%2B1%3D&address=172.16.0.2%2F32")
+    exit_node = ai.parse_node_uri("vless://33333333-3333-3333-3333-333333333333@203.0.113.10:443?security=tls&type=ws")
+    cfg = ai.build_entry_exit_chain(warp_entry, exit_node, port=10855, fragment=True, fp="safari")
+    obs = cfg["outbounds"]
+    assert obs[0]["tag"] == "exit"
+    assert obs[0]["sockopt"]["dialerProxy"] == "entry"
+    assert obs[0]["streamSettings"]["tlsSettings"]["fingerprint"] == "safari"
+    assert obs[1]["tag"] == "entry"
+    assert obs[1]["protocol"] == "wireguard"
+
+    android_py = os.path.join(ROOT, "android", "app", "src", "main", "python")
+    if android_py not in sys.path:
+        sys.path.insert(0, android_py)
+    a_ai = load(os.path.join("android", "app", "src", "main", "python", "dastyab_aistudio.py"), "android_ai")
+    a_nodes = a_ai.parse_config_file_bytes("drop.txt", b"Header\n" + "\n".join(
+        f"vless://44444444-4444-4444-4444-{i:012d}@198.51.100.{(i % 200) + 1}:{443 + i}?security=tls"
+        for i in range(619)
+    ).encode())
+    assert len(a_nodes) == 619
+    a_cfg = a_ai.build_entry_exit_chain(warp_entry, exit_node, port=10855, fragment=True, fp="chrome")
+    assert a_cfg["outbounds"][0]["sockopt"]["dialerProxy"] == "entry"
+    assert a_cfg["outbounds"][1]["protocol"] == "wireguard"
+
+

@@ -351,6 +351,8 @@ pub enum PendingDialogAction {
     /// Create fresh client configs (all formats) from a user-supplied clean
     /// IP endpoint, reusing the last deployed worker link — no redeploy.
     CreateConfigFromIp,
+    /// Import configs from any `.txt`, `.sub`, `.yaml`, `.ovpn`, `.npvt`, or JSON file.
+    ImportConfigsFromPath,
     /// Edit a generated config's content in place.
     EditConfig(u64),
     /// Rename a generated config's label.
@@ -1873,6 +1875,46 @@ impl DastYabApp {
                             self.create_config_from_ip(&ep);
                         }
                     }
+                    Some(PendingDialogAction::ImportConfigsFromPath) => {
+                        if let DialogPayload::Text(raw_path) = payload {
+                            let path = std::path::PathBuf::from(raw_path.trim());
+                            if !path.exists() {
+                                self.note = format!("File not found: {}", path.display());
+                            } else {
+                                match std::fs::read(&path) {
+                                    Ok(bytes) => {
+                                        let fname = path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("configs.txt");
+                                        use dastyab_core::lion_warrior as lw;
+                                        let links = lw::extract_all_config_links_from_blob(
+                                            fname, &bytes,
+                                        );
+                                        let store_res =
+                                            dastyab_core::config_store::import_links_bulk_source(
+                                                &self.profile_id,
+                                                &links,
+                                                dastyab_core::config_store::SOURCE_MANUAL,
+                                            );
+                                        match store_res {
+                                            Ok(s) => {
+                                                self.state.reload_pending = true;
+                                                self.note = format!(
+                                                    "Imported {} config(s) (+{} new, {} dup) from {}",
+                                                    s.found, s.added, s.duplicates, fname
+                                                );
+                                            }
+                                            Err(e) => self.note = e.brief(),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.note = format!("Read error: {e}");
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Some(PendingDialogAction::EditConfig(rec_id)) => {
                         if let DialogPayload::Text(content) = payload {
                             match dastyab_core::generated_configs::update_config_content(
@@ -3058,10 +3100,12 @@ impl DastYabApp {
                 });
                     ui.add_space(2.0);
                     ui.label(
-                    egui::RichText::new("Learned from previous scans/configs — the more you scan, the more IPs appear here.")
+                        egui::RichText::new(
+                            "Learned from previous scans/configs — the more you scan, the more IPs appear here.",
+                        )
                         .color(GOLD_DIM)
                         .small(),
-                );
+                    );
                 },
             );
             ui.add_space(6.0);
@@ -3492,7 +3536,9 @@ impl DastYabApp {
                                                 }
                                                 if ui
                                                     .button("📄")
-                                                    .on_hover_text("Preview this snapshot (read the JSON)")
+                                                    .on_hover_text(
+                                                        "Preview this snapshot (read the JSON)",
+                                                    )
                                                     .clicked()
                                                 {
                                                     match std::fs::read_to_string(&b.path) {
@@ -3517,7 +3563,9 @@ impl DastYabApp {
                                                 }
                                                 if ui
                                                     .button("Restore → new")
-                                                    .on_hover_text("Restore this snapshot into a new profile")
+                                                    .on_hover_text(
+                                                        "Restore this snapshot into a new profile",
+                                                    )
                                                     .clicked()
                                                 {
                                                     let p = std::path::Path::new(&b.path);
@@ -3535,7 +3583,9 @@ impl DastYabApp {
                                                 }
                                                 if ui
                                                     .button("Restore → here")
-                                                    .on_hover_text("Overwrite THIS profile from this snapshot")
+                                                    .on_hover_text(
+                                                        "Overwrite THIS profile from this snapshot",
+                                                    )
                                                     .clicked()
                                                 {
                                                     let act = RestoreHere(b.path.clone());
@@ -4023,7 +4073,9 @@ impl DastYabApp {
         });
         let show = dastyab_core::journal::recent(&self.profile_id, 10);
         if show.is_empty() {
-            ui.label("Journal is empty — events appear after the daemon records blackout/rescue transitions.");
+            ui.label(
+                "Journal is empty — events appear after the daemon records blackout/rescue transitions.",
+            );
         } else {
             egui::ScrollArea::vertical()
                 .max_height(160.0)

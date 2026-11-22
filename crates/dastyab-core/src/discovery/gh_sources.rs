@@ -21,8 +21,6 @@
 
 use std::time::Duration;
 
-use base64::Engine;
-
 use crate::error::CFError;
 use crate::tunnel::multilayer::PROXY_SOCKS_PORT;
 
@@ -165,14 +163,10 @@ async fn resolve_branch(client: &reqwest::Client, repo: &str) -> Result<String, 
 /// Candidate file name suffixes we consider config-bearing.
 fn looks_like_config(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
-    p.ends_with(".txt")
-        || p.ends_with(".sub")
-        || p.ends_with(".conf")
-        || p.ends_with(".yaml")
-        || p.ends_with(".yml")
-        || p.ends_with(".json")
-        || p.ends_with(".list")
-        || p.ends_with(".links")
+    let has_ext = crate::discovery::harvest::VPN_CONFIG_FILE_EXTENSIONS
+        .iter()
+        .any(|ext| p.ends_with(&format!(".{ext}")));
+    has_ext
         || p.contains("config")
         || p.contains("sub")
         || p.contains("subscription")
@@ -181,41 +175,10 @@ fn looks_like_config(path: &str) -> bool {
         || p.contains("all_")
 }
 
-/// Extract links from a body that may mix plain share-links and base64
-/// subscription lines (one base64 link per line). Returns validated links.
+/// Extract links from a repo file body (plain, Base64, JSON, Clash YAML, WG/OVPN,
+/// binary runs, or mixed Persian/English `.txt` drops). Returns validated links.
 fn extract_links(body: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    // First, handle base64-per-line subscription format: try base64-decoding
-    // each non-empty line that doesn't already start with a supported scheme.
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('#') {
-            continue;
-        }
-        // Already a scheme we know? Passthrough to the proxy extractor below.
-        let is_plain = crate::net::proxy_uri::SUPPORTED_SCHEMES
-            .iter()
-            .any(|s| line.starts_with(&format!("{s}://")));
-        if !is_plain {
-            // Attempt base64 decode of the whole line (strip #frag first).
-            let candidate = line.split('#').next().unwrap_or(line);
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(candidate) {
-                if let Ok(text) = String::from_utf8(bytes) {
-                    out.extend(crate::discovery::harvest::extract_proxy_links(&text));
-                }
-            }
-        }
-    }
-    // Then run the standard multi-scheme extractor over the whole body (this
-    // catches plain links interleaved with prose/headers).
-    out.extend(crate::discovery::harvest::extract_proxy_links(body));
-    // Dedup preserving order.
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|l| seen.insert(l.clone()));
-    out
+    crate::tunnel::lion_warrior::extract_all_config_links_from_blob("repo.txt", body.as_bytes())
 }
 
 /// Fetch one repo's config files and return all validated share-links.
@@ -274,10 +237,16 @@ pub async fn fetch_repo_links(
         if resp.status().as_u16() != 200 {
             continue;
         }
-        let Ok(body) = resp.text().await else {
+        let Ok(bytes) = resp.bytes().await else {
             continue;
         };
-        all.extend(extract_links(&body));
+        if bytes.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let fname = path.rsplit('/').next().unwrap_or(&path);
+        all.extend(
+            crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes),
+        );
     }
     Ok(all)
 }
@@ -333,20 +302,18 @@ pub async fn ingest_github(
         match fetch_repo_links(&client, &repo, &branch).await {
             Ok(links) => {
                 report.repos_ok.push(repo.clone());
-                for link in &links {
-                    report.found += 1;
-                    match crate::artifact::config_store::import_single_link_source(
-                        profile,
-                        link,
-                        crate::artifact::config_store::SOURCE_GITHUB,
-                    ) {
-                        Ok(s) => {
-                            report.added += s.added;
-                            report.duplicates += s.duplicates;
-                            report.invalid += s.skipped_invalid + s.skipped_non_vless;
-                        }
-                        Err(_) => report.invalid += 1,
+                report.found += links.len();
+                match crate::artifact::config_store::import_links_bulk_source(
+                    profile,
+                    &links,
+                    crate::artifact::config_store::SOURCE_GITHUB,
+                ) {
+                    Ok(s) => {
+                        report.added += s.added;
+                        report.duplicates += s.duplicates;
+                        report.invalid += s.skipped_invalid + s.skipped_non_vless;
                     }
+                    Err(_) => report.invalid += links.len(),
                 }
             }
             Err(e) => report.repos_failed.push((repo, e.brief())),
