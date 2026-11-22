@@ -561,11 +561,16 @@ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
         }
         "socks5" | "socks" => {
             let is_local = parsed.host == "127.0.0.1" || parsed.host == "localhost";
-            let (user, pass) = parsed
-                .id
-                .split_once(':')
-                .map(|(u, p)| (u.to_string(), p.to_string()))
-                .unwrap_or_else(|| (parsed.id.clone(), String::new()));
+            let authority = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+            let (user, pass) = if authority.contains('@') {
+                parsed
+                    .id
+                    .split_once(':')
+                    .map(|(u, p)| (u.to_string(), p.to_string()))
+                    .unwrap_or_else(|| (parsed.id.clone(), String::new()))
+            } else {
+                (String::new(), String::new())
+            };
             Ok(ChainHop {
                 scheme: HopScheme::Socks5,
                 host: parsed.host,
@@ -621,7 +626,7 @@ pub fn parse_configs_from_blob(filename: &str, bytes: &[u8]) -> Vec<ChainHop> {
     }
 
     let combined = if printable.len() > text.len() / 2 {
-        format!("{text}\n{printable}")
+        format!("{printable}\n{text}")
     } else {
         text.into_owned()
     };
@@ -1690,11 +1695,9 @@ async fn fetch_geo_asn(client: &reqwest::Client, ip: &str) -> Option<GeoAsnRepor
         Err(_) => TraceInfo::default(),
     };
 
-    if let Ok(r) = client
-        .get("http://ip-api.com/json/?fields=status,country,countryCode,isp,org,as,proxy,hosting")
-        .send()
-        .await
-    {
+    const IP_API_URL: &str =
+        "http://ip-api.com/json/?fields=status,country,countryCode,isp,org,as,proxy,hosting";
+    if let Ok(r) = client.get(IP_API_URL).send().await {
         if let Ok(v) = r.json::<serde_json::Value>().await {
             if v.get("status").and_then(|x| x.as_str()) == Some("success") {
                 let cc = v["countryCode"].as_str().unwrap_or("").to_ascii_uppercase();
@@ -2269,6 +2272,7 @@ mod tests {
         let npv_hops = parse_configs_from_blob("free.npvt", &npv_bytes);
         assert_eq!(npv_hops.len(), 1);
         assert_eq!(npv_hops[0].host, "203.0.113.44");
+        assert_eq!(npv_hops[0].param_val("security", ""), "tls");
 
         let wg_conf = concat!(
             "[Interface]\n",
@@ -2299,7 +2303,15 @@ mod tests {
             sample_vless("50.5.5.5"),
             wg_hops[0].clone(),
         ];
-        let local = vec![parse_chain_hop("socks5://127.0.0.1:9050").unwrap()];
+        let local_hop = parse_chain_hop("socks5://127.0.0.1:9050").unwrap();
+        assert!(local_hop.auth_id.is_empty());
+        assert!(local_hop.is_local_bridge);
+        let authed_socks = parse_chain_hop("socks5://alice:bob@192.0.2.1:1080").unwrap();
+        assert_eq!(authed_socks.auth_id, "alice");
+        assert_eq!(authed_socks.secret, "bob");
+        assert!(!authed_socks.is_local_bridge);
+
+        let local = vec![local_hop];
         let plans = generate_brutal_chains(
             &cands,
             &cands,

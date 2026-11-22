@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::vless::VlessProfile;
 use crate::error::CFError;
-use crate::tunnel::lion_warrior::{country_to_locale_tz, hardened_chrome_args};
+use crate::tunnel::lion_warrior::{
+    build_xray_chain_config, country_to_locale_tz, hardened_chrome_args, parse_chain_hop,
+    verify_persona_through_socks, ChainDialOptions, ServicePersona,
+};
 
 /// Whether this profile has a final-server chain configured.
 pub fn is_chain_configured(profile_id: &str) -> bool {
@@ -144,19 +147,20 @@ pub fn build_chain_xray_json(
     socks_port: u16,
 ) -> Result<String, CFError> {
     if !ext.relay_links.is_empty() || ext.fragment_dpi || !cfg.vless_link.starts_with("vless://") {
-        let mut hops = vec![crate::tunnel::lion_warrior::parse_chain_hop(&cfg.vless_link)?];
+        let exit_hop = parse_chain_hop(&cfg.vless_link)?;
+        let mut hops = vec![exit_hop];
         for link in &ext.relay_links {
             let trimmed = link.trim();
             if !trimmed.is_empty() {
-                hops.push(crate::tunnel::lion_warrior::parse_chain_hop(trimmed)?);
+                hops.push(parse_chain_hop(trimmed)?);
             }
         }
-        let opts = crate::tunnel::lion_warrior::ChainDialOptions {
+        let opts = ChainDialOptions {
             socks_port,
             fragment_dpi: ext.fragment_dpi,
             ..Default::default()
         };
-        return crate::tunnel::lion_warrior::build_xray_chain_config(&hops, &opts);
+        return build_xray_chain_config(&hops, &opts);
     }
     parse_final_server(cfg)?.xray_client_json_at_port(socks_port)
 }
@@ -346,13 +350,8 @@ pub async fn probe_flow_access_with_ext(
 
     let raw_hint = cfg.country_hint.trim();
     let hint = (!raw_hint.is_empty()).then_some(raw_hint);
-    let report = crate::tunnel::lion_warrior::verify_persona_through_socks(
-        flow_port,
-        crate::tunnel::lion_warrior::ServicePersona::WarriorFlow,
-        hint,
-        false,
-    )
-    .await;
+    let persona = ServicePersona::WarriorFlow;
+    let report = verify_persona_through_socks(flow_port, persona, hint, false).await;
 
     let _ = child.kill().await;
     let _ = child.wait().await;
@@ -404,13 +403,8 @@ async fn probe_ai_access_with_ext(
 
     let raw_hint = cfg.country_hint.trim();
     let hint = (!raw_hint.is_empty()).then_some(raw_hint);
-    let res = crate::tunnel::lion_warrior::verify_persona_through_socks(
-        PROXY_SOCKS_PORT,
-        crate::tunnel::lion_warrior::ServicePersona::LionAiStudio,
-        hint,
-        false,
-    )
-    .await;
+    let persona = ServicePersona::LionAiStudio;
+    let res = verify_persona_through_socks(PROXY_SOCKS_PORT, persona, hint, false).await;
 
     // Cleanup.
     let _ = child.kill().await;
@@ -621,7 +615,7 @@ pub async fn probe_gemini_api_cfg(
             ok: false,
             model: MODEL.to_string(),
             answer: None,
-            note: format!("{e}"),
+            note: e.to_string(),
         },
     };
 
