@@ -17,7 +17,9 @@ use eframe::egui;
 use crate::app::{DastYabApp, PendingDialogAction};
 use crate::bridge;
 use crate::dialogs;
-use crate::views::{section_card, stat_chips, tag, CARD, CARD_STROKE, GOLD, GOLD_DIM, SUCCESS, TEXT};
+use crate::views::{
+    section_card, stat_chips, tag, CARD, CARD_STROKE, GOLD, GOLD_DIM, SUCCESS, TEXT,
+};
 use dastyab_core::CFError;
 
 /// Render the tokens panel. Returns an action the app should handle.
@@ -342,7 +344,12 @@ pub fn run_action(app: &mut DastYabApp, action: TokensAction) -> Option<crate::d
     match action {
         TokensAction::Add => {
             app.pending_action = Some(PendingDialogAction::AddToken);
-            Some(crate::dialogs::prompt_two("Add token", "Label", "Token", true))
+            Some(crate::dialogs::prompt_two(
+                "Add token",
+                "Label",
+                "Token",
+                true,
+            ))
         }
         TokensAction::Remove(label) => {
             // Target the profile the user is actually viewing (`profile_id`),

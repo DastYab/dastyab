@@ -2599,7 +2599,9 @@ impl DastYabApp {
         if !self.note.is_empty() {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&self.note).color(GOLD_DIM)));
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&self.note).color(GOLD_DIM),
+                ));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("✕")
@@ -2737,7 +2739,9 @@ impl DastYabApp {
                 ("🛡 PROTECTION: OFF", egui::Color32::from_rgb(220, 120, 90))
             };
             let on = ui
-                .add(egui::Button::new(egui::RichText::new(label).color(color).strong().size(16.0)))
+                .add(egui::Button::new(
+                    egui::RichText::new(label).color(color).strong().size(16.0),
+                ))
                 .clicked();
             if on {
                 // Toggle direction depends on current state.

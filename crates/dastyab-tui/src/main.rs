@@ -413,7 +413,10 @@ fn render_links(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
                     Span::styled(node.alias.clone(), Style::default().fg(TEXT)),
                 ]));
                 let clipped: String = node.url.chars().take(90).collect();
-                lines.push(Line::from(Span::styled(clipped, Style::default().fg(GOLD_DIM))));
+                lines.push(Line::from(Span::styled(
+                    clipped,
+                    Style::default().fg(GOLD_DIM),
+                )));
             }
         }
     }

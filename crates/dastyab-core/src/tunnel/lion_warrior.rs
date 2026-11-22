@@ -2691,7 +2691,10 @@ async fn dial_through_proxy(
             }
             Ok(())
         }
-        _ => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported native hop")),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unsupported native hop",
+        )),
     }
 }
 
@@ -3011,7 +3014,8 @@ mod tests {
             r#"{"outbounds":[{"type":"trojan","server":"203.0.113.11","server_port":443,"password":"pw"}]}"#,
         );
         blob.push('\n');
-        let inner = "vless://22222222-2222-2222-2222-222222222222@203.0.113.12:443?security=tls#b64";
+        let inner =
+            "vless://22222222-2222-2222-2222-222222222222@203.0.113.12:443?security=tls#b64";
         let b1 = base64::engine::general_purpose::STANDARD.encode(inner);
         let b2 = base64::engine::general_purpose::STANDARD.encode(&b1);
         blob.push_str(&b2);
