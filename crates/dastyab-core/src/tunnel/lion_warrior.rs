@@ -1272,8 +1272,7 @@ pub fn generate_brutal_chains(
 
     // Stage 4: Deep multi-layer cascades (4..=max_hops, up to 8 layers + local anchor).
     if max_hops >= 4 {
-        let mut combined_entries: Vec<ChainHop> =
-            relay_pool.iter().map(|h| (*h).clone()).collect();
+        let mut combined_entries: Vec<ChainHop> = relay_pool.iter().map(|h| (*h).clone()).collect();
         for lp in local_proxies {
             if !combined_entries.iter().any(|x| x.key() == lp.key()) {
                 combined_entries.push(lp.clone());
