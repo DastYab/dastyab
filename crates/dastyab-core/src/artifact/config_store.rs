@@ -1064,7 +1064,7 @@ mod tests {
         s.nodes = Vec::new();
         s.nodes.push(node("active", Some(true)));
         s.nodes.push(node("healthy", Some(true)));
-        for i in 0..1200 {
+        for i in 0..(MAX_NODES + 100) {
             s.nodes.push(node(&format!("n{i:04}"), Some(false)));
         }
         s.nodes.push(node("active", Some(false))); // dup id — should not matter
