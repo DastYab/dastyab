@@ -624,7 +624,7 @@ pub fn verify_binary_payload(
     if let Some(expected) = expected_sha256 {
         let actual = sha256_hex(bytes);
         if !actual.eq_ignore_ascii_case(expected.trim()) {
-            let exp_short = &expected[..expected.len().min(12)];
+            let exp_short: String = expected.trim().chars().take(12).collect();
             let got_short = &actual[..12];
             let detail = format!("SHA-256 mismatch (expected {exp_short}..., got {got_short}...).");
             let hint = "Aborting update to protect executable integrity.";
@@ -1045,5 +1045,14 @@ mod tests {
     #[test]
     fn auto_update_interval_is_sane() {
         assert_eq!(AUTO_UPDATE_INTERVAL_SECS, 86400);
+    }
+
+    #[test]
+    fn verify_binary_payload_handles_non_ascii_checksum_without_panic() {
+        let mut elf = vec![0x7f, b'E', b'L', b'F'];
+        elf.resize(2048, 0xAA);
+        let bad_expected = "خطای-شبکه-غیرمنتظره";
+        let err = verify_binary_payload(&elf, "linux", Some(bad_expected)).unwrap_err();
+        assert_eq!(err.title, "Checksum mismatch");
     }
 }

@@ -64,6 +64,7 @@ pub struct Beacon {
 }
 
 impl Beacon {
+    /// Construct a new LAN mesh discovery beacon for this instance.
     pub fn new(peer_id: impl Into<String>, name: impl Into<String>, has_uplink: bool) -> Self {
         Self {
             magic: MAGIC.to_string(),
@@ -104,6 +105,7 @@ pub struct Neighbor {
 }
 
 impl Neighbor {
+    /// Return whether this neighbor's last heartbeat is still within [`NEIGHBOR_TIMEOUT_SECS`].
     pub fn is_fresh(&self, now_unix: u64) -> bool {
         now_unix.saturating_sub(self.last_seen_unix) <= NEIGHBOR_TIMEOUT_SECS
     }
@@ -117,8 +119,13 @@ pub struct NeighborTable {
 }
 
 impl NeighborTable {
+    /// Create an empty neighbor table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn lock_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Neighbor>> {
+        self.map.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Record a heartbeat from `src`. Inserts or refreshes the entry. Returns
@@ -137,7 +144,7 @@ impl NeighborTable {
             last_seen_unix: now_unix,
             rtt_ms: 0,
         };
-        let mut guard = self.map.lock().unwrap();
+        let mut guard = self.lock_map();
         // Preserve smoothed RTT across heartbeats.
         if let Some(prev) = guard.get(&b.peer_id) {
             let mut n = n;
@@ -151,7 +158,7 @@ impl NeighborTable {
 
     /// Record an RTT sample for a peer.
     pub fn observe_rtt(&self, peer_id: &str, rtt_ms: u64) {
-        if let Some(g) = self.map.lock().unwrap().get_mut(peer_id) {
+        if let Some(g) = self.lock_map().get_mut(peer_id) {
             // EWMA: 0.5 old + 0.5 new keeps it responsive but stable.
             g.rtt_ms = if g.rtt_ms == 0 {
                 rtt_ms
@@ -163,18 +170,18 @@ impl NeighborTable {
 
     /// Remove all stale peers.
     pub fn prune_stale(&self, now_unix: u64) {
-        self.map.lock().unwrap().retain(|_, n| n.is_fresh(now_unix));
+        self.lock_map().retain(|_, n| n.is_fresh(now_unix));
     }
 
     /// Remove a specific peer id (used to drop our own echo/loopback).
     pub fn forget(&self, peer_id: &str) {
-        self.map.lock().unwrap().remove(peer_id);
+        self.lock_map().remove(peer_id);
     }
 
     /// All live neighbors sorted by recency (most recent first).
     pub fn live(&self, now_unix: u64) -> Vec<Neighbor> {
         self.prune_stale(now_unix);
-        let mut v: Vec<Neighbor> = self.map.lock().unwrap().values().cloned().collect();
+        let mut v: Vec<Neighbor> = self.lock_map().values().cloned().collect();
         v.sort_by_key(|n| std::cmp::Reverse(n.last_seen_unix));
         v
     }
@@ -188,6 +195,7 @@ impl NeighborTable {
             .min_by_key(|n| (n.rtt_ms, std::cmp::Reverse(n.last_seen_unix)))
     }
 
+    /// Return the count of live (non-stale) neighbors at `now_unix`.
     pub fn len(&self, now_unix: u64) -> usize {
         self.live(now_unix).len()
     }
@@ -333,5 +341,15 @@ mod tests {
         t.observe_rtt("slow", 240);
         t.observe_rtt("fast", 40);
         assert_eq!(t.best_relay(NOW).unwrap().peer_id, "fast");
+    }
+
+    #[test]
+    fn best_relay_none_without_uplink_and_is_fresh_boundary() {
+        let t = NeighborTable::new();
+        let src = SocketAddr::new([192, 168, 1, 9].into(), 1000);
+        let n = t.observe(src, &beacon("no-up", false, "c"), NOW);
+        assert!(n.is_fresh(NOW + NEIGHBOR_TIMEOUT_SECS));
+        assert!(!n.is_fresh(NOW + NEIGHBOR_TIMEOUT_SECS + 1));
+        assert!(t.best_relay(NOW).is_none());
     }
 }

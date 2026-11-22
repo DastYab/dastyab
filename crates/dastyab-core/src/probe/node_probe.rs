@@ -239,11 +239,8 @@ fn probe_one(url: &str, use_proxy: bool) -> (bool, u128, Option<String>) {
     let (host, port) = match parse_host_port(url) {
         Some(x) => x,
         None => {
-            return (
-                false,
-                0,
-                Some(format!("unparseable URL: {}", &url[..url.len().min(24)])),
-            );
+            let preview: String = url.chars().take(24).collect();
+            return (false, 0, Some(format!("unparseable URL: {preview}")));
         }
     };
     let tls = link_uses_tls(url);
@@ -797,5 +794,14 @@ mod tests {
         // Never-checked now probed → healthy.
         assert_eq!(by_id("never").healthy, Some(true));
         assert!(by_id("never").last_checked_epoch.is_some());
+    }
+
+    #[test]
+    fn probe_one_handles_multibyte_unparseable_url() {
+        let bad = "سلام-این-یک-لینک-نامعتبر-است-🚀-test";
+        let (ok, ms, err) = probe_one(bad, false);
+        assert!(!ok);
+        assert_eq!(ms, 0);
+        assert!(err.unwrap().starts_with("unparseable URL: "));
     }
 }

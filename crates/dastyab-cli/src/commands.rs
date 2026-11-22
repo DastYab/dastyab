@@ -1702,10 +1702,13 @@ fn cmd_profiles() -> Result<(), CFError> {
 }
 
 fn mask(tok: &str) -> String {
-    if tok.len() <= 8 {
+    let count = tok.chars().count();
+    if count <= 8 {
         return "••••••••".to_string();
     }
-    format!("{}…{}", &tok[..4], &tok[tok.len() - 4..])
+    let head: String = tok.chars().take(4).collect();
+    let tail: String = tok.chars().skip(count - 4).collect();
+    format!("{head}…{tail}")
 }
 
 fn first_token(p: &dastyab_core::store::profiles::Profile) -> Result<String, CFError> {
@@ -5262,15 +5265,16 @@ fn cmd_mesh(
                             match dastyab_core::mesh_relay::forward_data(b.addr, &req, timeout) {
                                 Ok(dastyab_core::mesh_relay::ForwardOutcome::Ok(reply)) => {
                                     let body = String::from_utf8_lossy(&reply.body);
+                                    let preview = if body.chars().count() > 500 {
+                                        let head: String = body.chars().take(500).collect();
+                                        format!("{head}…")
+                                    } else {
+                                        body.into_owned()
+                                    };
+                                    let status = reply.status;
+                                    let len = reply.body.len();
                                     println!(
-                                        "[mesh] hop reply: HTTP {} ({} bytes)\n{}",
-                                        reply.status,
-                                        reply.body.len(),
-                                        if body.len() > 500 {
-                                            format!("{}…", &body[..500])
-                                        } else {
-                                            body.to_string()
-                                        }
+                                        "[mesh] hop reply: HTTP {status} ({len} bytes)\n{preview}"
                                     );
                                     Ok(())
                                 }
@@ -7163,5 +7167,12 @@ mod tests {
         assert!(!allows_cli_auto_update(&Command::Doctor { json: true }));
         assert!(allows_cli_auto_update(&Command::Doctor { json: false }));
         assert!(!allows_cli_auto_update(&Command::Health { json: true }));
+    }
+
+    #[test]
+    fn mask_handles_ascii_and_multibyte_tokens() {
+        assert_eq!(mask("short"), "••••••••");
+        assert_eq!(mask("abcd1234wxyz"), "abcd…wxyz");
+        assert_eq!(mask("کلید-تست-طولانی"), "کلید…لانی");
     }
 }

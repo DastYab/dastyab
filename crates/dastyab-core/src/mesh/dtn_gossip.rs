@@ -179,14 +179,11 @@ impl SignedBundle {
 
     /// Verify signature and return the sender key if valid.
     pub fn verify(&self) -> Result<VerifyingKey, CFError> {
-        if self.sender_pk.len() != 32 {
-            return Err(CFError::new(
-                "gossip",
-                "bad sender public key length",
-                "reject",
-            ));
-        }
-        let vk = VerifyingKey::from_bytes(&self.sender_pk[..].try_into().unwrap())
+        let raw_pk: &[u8] = &self.sender_pk;
+        let pk_bytes: [u8; 32] = raw_pk
+            .try_into()
+            .map_err(|_| CFError::new("gossip", "bad sender public key length", "reject"))?;
+        let vk = VerifyingKey::from_bytes(&pk_bytes)
             .map_err(|e| CFError::new("gossip", format!("bad sender public key: {e}"), "reject"))?;
         let sig = Signature::from_bytes(
             &self.sig[..]
@@ -795,5 +792,15 @@ mod tests {
             missing_a.contains(&node_url_fp("vless://b1")),
             "A missing b1"
         );
+    }
+
+    #[test]
+    fn verify_rejects_bad_sender_pk_length_without_panic() {
+        let key = test_signing();
+        let mut b = SignedBundle::sign(&key, 1, vec![item("vless://a")]).unwrap();
+        b.sender_pk = vec![1, 2, 3];
+        assert!(b.verify().is_err());
+        b.sender_pk = vec![0; 33];
+        assert!(b.verify().is_err());
     }
 }

@@ -436,19 +436,15 @@ impl Client {
 
         let mut last_err: Option<CFError> = None;
         for attempt in 0..=retries {
+            let meta_part = multipart::Part::text(metadata_str.clone())
+                .mime_str("application/json")
+                .map_err(|e| CFError::new("Deploy", format!("MIME error: {e}"), ""))?;
+            let js_part = multipart::Part::bytes(js.clone())
+                .mime_str("application/javascript")
+                .map_err(|e| CFError::new("Deploy", format!("MIME error: {e}"), ""))?;
             let form = multipart::Form::new()
-                .part(
-                    "metadata",
-                    multipart::Part::text(metadata_str.clone())
-                        .mime_str("application/json")
-                        .unwrap(),
-                )
-                .part(
-                    "_worker.js",
-                    multipart::Part::bytes(js.clone())
-                        .mime_str("application/javascript")
-                        .unwrap(),
-                );
+                .part("metadata", meta_part)
+                .part("_worker.js", js_part);
 
             match self
                 .request(
@@ -472,7 +468,13 @@ impl Client {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| CFError::new("Deploy", "unknown", "")))
+        Err(last_err.unwrap_or_else(|| {
+            CFError::new(
+                "Deploy",
+                format!("worker '{name}' deploy failed with no upstream error detail"),
+                "check Cloudflare API connectivity and retry",
+            )
+        }))
     }
 
     /// Set worker environment variables (PATCH settings).
@@ -572,19 +574,15 @@ impl Client {
 
         let mut last_err: Option<CFError> = None;
         for attempt in 0..=retries {
+            let meta_part = multipart::Part::text(metadata_str.clone())
+                .mime_str("application/json")
+                .map_err(|e| CFError::new("Deploy", format!("MIME error: {e}"), ""))?;
+            let js_part = multipart::Part::bytes(js.clone())
+                .mime_str("application/javascript")
+                .map_err(|e| CFError::new("Deploy", format!("MIME error: {e}"), ""))?;
             let form = multipart::Form::new()
-                .part(
-                    "metadata",
-                    multipart::Part::text(metadata_str.clone())
-                        .mime_str("application/json")
-                        .unwrap(),
-                )
-                .part(
-                    "_worker.js",
-                    multipart::Part::bytes(js.clone())
-                        .mime_str("application/javascript")
-                        .unwrap(),
-                );
+                .part("metadata", meta_part)
+                .part("_worker.js", js_part);
 
             match self
                 .request(
@@ -608,7 +606,13 @@ impl Client {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| CFError::new("Deploy", "unknown", "")))
+        Err(last_err.unwrap_or_else(|| {
+            CFError::new(
+                "Deploy",
+                format!("worker '{name}' deploy failed with no upstream error detail"),
+                "check Cloudflare API connectivity and retry",
+            )
+        }))
     }
 
     /// Delete a worker script.

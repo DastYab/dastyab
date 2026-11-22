@@ -32,6 +32,18 @@ fn scratch_cfg() -> PathBuf {
         .join("e2e-tmp-config.json")
 }
 
+/// Truncate `s` to at most `max_bytes` bytes without splitting a UTF-8 code point.
+fn prefix_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Handle to a spawned tunnel process (or, in tests, a spawned mock task) that
 /// must be killed/aborted when verification ends.
 pub enum ChildHandle {
@@ -234,7 +246,7 @@ async fn fetch_ip_via(
     if ip.is_empty() {
         return Err(CFError::new(
             "E2E",
-            format!("no IP found in echo body: {}", &text[..text.len().min(160)]),
+            format!("no IP found in echo body: {}", prefix_utf8(&text, 160)),
             "",
         ));
     }
@@ -289,12 +301,10 @@ pub async fn fetch_direct_ip(timeout_s: u64) -> Result<String, CFError> {
         })
         .unwrap_or("");
     if ip.is_empty() {
+        let preview = prefix_utf8(&text, 160);
         return Err(CFError::new(
             "E2E",
-            format!(
-                "no IP found in direct echo body: {}",
-                &text[..text.len().min(160)]
-            ),
+            format!("no IP found in direct echo body: {preview}"),
             "",
         ));
     }
@@ -308,8 +318,13 @@ pub async fn ensure_singbox(pinned_version: &str) -> Result<PathBuf, CFError> {
     if bin.exists() {
         return Ok(bin);
     }
-    std::fs::create_dir_all(bin.parent().unwrap())
-        .map_err(|e| CFError::new("Storage error", format!("Cannot create bin dir: {e}"), ""))?;
+    if let Some(parent) = bin.parent() {
+        let res = std::fs::create_dir_all(parent);
+        if let Err(e) = res {
+            let detail = format!("Cannot create bin dir: {e}");
+            return Err(CFError::new("Storage error", detail, ""));
+        }
+    }
     // Linux amd64 is the only packaging we ship; Android/mac-arm/other hosts
     // must supply the binary themselves — fall back to a clearly-labelled
     // asset name so the failure message names the missing platform support.
@@ -622,6 +637,17 @@ mod tests {
             socks5_connect("127.0.0.1:1", "api.ipify.org", 80, Duration::from_secs(1)).await
         });
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn prefix_utf8_respects_multibyte_boundaries() {
+        assert_eq!(prefix_utf8("hello", 10), "hello");
+        // Each Persian char is 2 bytes; a 3-byte budget must back up to 2 bytes.
+        let fa = "سلام";
+        assert_eq!(prefix_utf8(fa, 3), "س");
+        assert_eq!(prefix_utf8(fa, 4), "سل");
+        // 4-byte emoji with 2-byte budget backs up to empty slice.
+        assert_eq!(prefix_utf8("🚀x", 2), "");
     }
 
     /// LIVE integration test (ignored by default): prove the E2E gate works
