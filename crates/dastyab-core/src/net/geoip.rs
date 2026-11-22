@@ -40,7 +40,7 @@ impl GeoDB {
                             continue;
                         }
                         if let Some((r, cc)) = line.split_once('=') {
-                            if let Ok(octets) = r.parse::<u32>() {
+                            if let Ok(octets) = r.trim().parse::<u32>() {
                                 ranges.insert(octets, cc.trim().to_string());
                             }
                         }
@@ -137,5 +137,31 @@ mod tests {
         let db = GeoDB::load(None);
         let ip: IpAddr = "1.1.1.1".parse().unwrap();
         assert_eq!(db.country_code(&ip), None);
+    }
+
+    #[test]
+    fn load_custom_ranges_skips_comments_and_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("geo.txt");
+        std::fs::write(&path, "# comment\n\nnot_a_number=US\nmalformed\n42 = FR \n").unwrap();
+        let db = GeoDB::load(Some(&path));
+        let ip_fr: IpAddr = "42.10.20.30".parse().unwrap();
+        assert_eq!(db.country_code(&ip_fr).as_deref(), Some("FR"));
+        // Built-in entries are replaced when a valid custom map is loaded.
+        let ip_ir: IpAddr = "81.0.0.1".parse().unwrap();
+        assert_eq!(db.country_code(&ip_ir), None);
+
+        // Missing or empty custom file falls back to built-in ranges.
+        let empty = dir.path().join("empty.txt");
+        std::fs::write(&empty, "# only comments\n").unwrap();
+        let fallback = GeoDB::load(Some(&empty));
+        assert_eq!(fallback.country_code(&ip_ir).as_deref(), Some("IR"));
+    }
+
+    #[test]
+    fn country_lookup_returns_none_for_ipv6() {
+        let db = GeoDB::load(None);
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(db.country_code(&v6), None);
     }
 }

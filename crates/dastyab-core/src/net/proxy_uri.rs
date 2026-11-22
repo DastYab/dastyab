@@ -941,4 +941,79 @@ mod tests {
             let _ = extract_mtproto_links(s);
         }
     }
+
+    #[test]
+    fn parses_ipv6_and_percent_decoded_aliases() {
+        let v6 = ProxyUri::parse("vless://uuid-1@[2001:db8::1]:443?type=tcp#Edge%20Node").unwrap();
+        assert_eq!(v6.host, "2001:db8::1");
+        assert_eq!(v6.port, 443);
+        assert_eq!(v6.alias, "Edge Node");
+
+        let s5 = ProxyUri::parse("socks5://[::1]:1080").unwrap();
+        assert_eq!(s5.host, "::1");
+        assert_eq!(s5.port, 1080);
+        assert_eq!(s5.id, "::1:1080");
+
+        assert!(ProxyUri::parse("vless://u@[2001:db8::1:443").is_none());
+
+        let tr = ProxyUri::parse("trojan://p%40ss@example.com:8443#My%20Relay").unwrap();
+        assert_eq!(tr.id, "p@ss");
+        assert_eq!(tr.alias, "My Relay");
+    }
+
+    #[test]
+    fn parses_explicit_http_proxy_and_rejects_web_urls() {
+        let auth = ProxyUri::parse("http://alice:s3cr3t@198.51.100.2:8080").unwrap();
+        assert_eq!(auth.scheme, "http");
+        assert_eq!(auth.host, "198.51.100.2");
+        assert_eq!(auth.port, 8080);
+        assert_eq!(auth.id, "alice:s3cr3t");
+
+        let plain = ProxyUri::parse("http://198.51.100.2:3128").unwrap();
+        assert_eq!(plain.id, "198.51.100.2:3128");
+
+        assert!(ProxyUri::parse("https://github.com/org/repo").is_none());
+        assert!(ProxyUri::parse("http://198.51.100.2/login").is_none());
+        assert!(ProxyUri::parse("http://198.51.100.2:8080?q=1").is_none());
+    }
+
+    #[test]
+    fn parses_whole_link_ss_and_vmess_integer_port() {
+        let ss_raw = "chacha20-ietf-poly1305:pw123@203.0.113.5:8388";
+        let ss_b64 = base64::engine::general_purpose::STANDARD.encode(ss_raw);
+        let ss = ProxyUri::parse(&format!("ss://{ss_b64}#SS-Whole")).unwrap();
+        assert_eq!(ss.host, "203.0.113.5");
+        assert_eq!(ss.port, 8388);
+        assert_eq!(ss.id, "chacha20-ietf-poly1305:pw123");
+        assert_eq!(ss.alias, "SS-Whole");
+
+        let vmess_json = r#"{"add":"198.51.100.9","port":443,"id":"vm-id-1"}"#;
+        let vm_b64 = base64::engine::general_purpose::STANDARD.encode(vmess_json);
+        let vm = ProxyUri::parse(&format!("vmess://{vm_b64}")).unwrap();
+        assert_eq!(vm.host, "198.51.100.9");
+        assert_eq!(vm.port, 443);
+        assert_eq!(vm.id, "vm-id-1");
+
+        let upper = ProxyUri::parse("VLESS://uuid@1.2.3.4:443").unwrap();
+        assert_eq!(upper.scheme, "vless");
+    }
+
+    #[test]
+    fn rejects_malformed_vmess_ssr_and_ss() {
+        let zero_port = base64::engine::general_purpose::STANDARD
+            .encode(r#"{"add":"1.2.3.4","port":0,"id":"abc"}"#);
+        assert!(ProxyUri::parse(&format!("vmess://{zero_port}")).is_none());
+
+        let missing_id = base64::engine::general_purpose::STANDARD
+            .encode(r#"{"add":"1.2.3.4","port":443}"#);
+        assert!(ProxyUri::parse(&format!("vmess://{missing_id}")).is_none());
+
+        let bad_ssr = base64::engine::general_purpose::STANDARD.encode("1.2.3.4:0:origin:plain");
+        assert!(ProxyUri::parse(&format!("ssr://{bad_ssr}")).is_none());
+        let short_ssr = base64::engine::general_purpose::STANDARD.encode("onlyhost");
+        assert!(ProxyUri::parse(&format!("ssr://{short_ssr}")).is_none());
+
+        let ss_no_colon = base64::engine::general_purpose::STANDARD.encode("nocolon@1.2.3.4:8388");
+        assert!(ProxyUri::parse(&format!("ss://{ss_no_colon}")).is_none());
+    }
 }

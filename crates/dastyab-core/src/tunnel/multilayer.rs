@@ -64,6 +64,7 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
+    /// Short lowercase identifier for this transport layer.
     pub fn label(self) -> &'static str {
         match self {
             LayerKind::Direct => "direct",
@@ -127,10 +128,12 @@ fn chain_ext_path(profile_id: &str) -> PathBuf {
     crate::store::profiles::profile_dir(profile_id).join("final-chain-ext.json")
 }
 
+/// Persist the multi-hop relay and DPI fragmentation config for `profile_id`.
 pub fn save_chain_ext(profile_id: &str, ext: &ChainExtConfig) -> Result<(), CFError> {
     crate::store::write_json(&chain_ext_path(profile_id), ext)
 }
 
+/// Load the multi-hop relay config for `profile_id`, defaulting when missing or corrupt.
 pub fn load_chain_ext(profile_id: &str) -> ChainExtConfig {
     crate::store::read_opt(&chain_ext_path(profile_id)).unwrap_or_default()
 }
@@ -189,6 +192,7 @@ pub struct AiAccessReport {
 }
 
 impl AiAccessReport {
+    /// Return whether the overall AI access probe passed.
     pub fn is_ok(&self) -> bool {
         self.ok
     }
@@ -309,6 +313,7 @@ pub async fn probe_flow_access(
     probe_flow_access_with_ext(&cfg, &ext).await
 }
 
+/// Strict Warrior probe for Google Flow using explicit exit + relay configs.
 pub async fn probe_flow_access_with_ext(
     cfg: &FinalServerConfig,
     ext: &ChainExtConfig,
@@ -642,6 +647,7 @@ pub enum TunnelMode {
 }
 
 impl TunnelMode {
+    /// Short lowercase identifier for this tunnel mode.
     pub fn label(self) -> &'static str {
         match self {
             TunnelMode::Device => "device",
@@ -649,6 +655,7 @@ impl TunnelMode {
             TunnelMode::Proxy => "proxy",
         }
     }
+    /// Parse a mode name (`"device"`, `"proxy"`, or `"chrome"`), defaulting to [`TunnelMode::Chrome`].
     pub fn parse_mode(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "device" => TunnelMode::Device,
@@ -994,6 +1001,34 @@ mod tests {
         let vr: serde_json::Value = serde_json::from_str(&json_remote).unwrap();
         let obsr = vr["outbounds"].as_array().unwrap();
         assert!(obsr.iter().any(|o| o["tag"] == "frag-dialer"));
+        crate::store::clear_mem_dir_override();
+    }
+
+    #[test]
+    fn tunnel_mode_parse_and_label_roundtrip() {
+        assert_eq!(TunnelMode::parse_mode("device").label(), "device");
+        assert_eq!(TunnelMode::parse_mode(" PROXY ").label(), "proxy");
+        assert_eq!(TunnelMode::parse_mode("chrome").label(), "chrome");
+        assert_eq!(TunnelMode::parse_mode("unknown"), TunnelMode::Chrome);
+    }
+
+    #[test]
+    fn build_chain_xray_json_rejects_bad_link_and_corrupt_chain_ext_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::store::set_mem_dir_override(dir.path().to_path_buf());
+        let bad_cfg = FinalServerConfig {
+            name: "bad".into(),
+            vless_link: "not-a-valid-link".into(),
+            country_hint: String::new(),
+        };
+        assert!(build_chain_xray_json(&bad_cfg, &ChainExtConfig::default(), 10863).is_err());
+
+        let ext_path = chain_ext_path("corrupt-prof");
+        std::fs::create_dir_all(ext_path.parent().unwrap()).unwrap();
+        std::fs::write(&ext_path, b"{not json").unwrap();
+        let loaded = load_chain_ext("corrupt-prof");
+        assert!(loaded.relay_links.is_empty());
+        assert!(!loaded.fragment_dpi);
         crate::store::clear_mem_dir_override();
     }
 }

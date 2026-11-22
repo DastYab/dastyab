@@ -107,7 +107,7 @@ pub async fn run(
         }
         Command::ProfileExport { id } => {
             let v = export_profile(&id)?;
-            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            println!("{}", to_pretty_json(&v)?);
             Ok(())
         }
         Command::ProfileImport { path } => {
@@ -1383,7 +1383,7 @@ fn cmd_config(profile: &str, action: crate::ConfigAction) -> Result<(), CFError>
                     "effective_network_down_sleep_secs": eff_blackout,
                     "beacon_enabled": c.beacon.as_ref().is_some_and(|b| b.enabled),
                 });
-                println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+                println!("{}", to_pretty_json(&obj)?);
                 return Ok(());
             }
             println!("Profile: {profile}");
@@ -1614,7 +1614,7 @@ fn cmd_health(profile: &str, json: bool) -> Result<(), CFError> {
     };
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&beacon).unwrap());
+        println!("{}", to_pretty_json(&beacon)?);
         return Ok(());
     }
 
@@ -1709,6 +1709,11 @@ fn mask(tok: &str) -> String {
     let head: String = tok.chars().take(4).collect();
     let tail: String = tok.chars().skip(count - 4).collect();
     format!("{head}…{tail}")
+}
+
+fn to_pretty_json<T: serde::Serialize>(value: &T) -> Result<String, CFError> {
+    serde_json::to_string_pretty(value)
+        .map_err(|e| CFError::new("JSON error", format!("failed to serialize output: {e}"), ""))
 }
 
 fn first_token(p: &dastyab_core::store::profiles::Profile) -> Result<String, CFError> {
@@ -2112,7 +2117,7 @@ fn cleanip_cmd(profile: &str, action: CleanipAction) -> Result<String, CFError> 
                         })
                     })
                     .collect();
-                return Ok(serde_json::to_string_pretty(&arr).unwrap());
+                return to_pretty_json(&arr);
             }
             let mut out = format!("Clean IPs ({}):\n", rows.len());
             for (ep, m) in &rows {
@@ -2184,7 +2189,7 @@ fn configs_cmd(profile: &str, action: crate::ConfigsAction) -> Result<(), CFErro
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+                println!("{}", to_pretty_json(&arr)?);
                 return Ok(());
             }
             if hits.is_empty() {
@@ -3532,13 +3537,14 @@ fn cmd_desync(profile: &str, action: crate::DesyncAction) -> Result<(), CFError>
                 .config
                 .worker_secrets
                 .iter()
-                .filter(|(_, ws)| ws.desync_strategy.is_some())
-                .map(|(url, ws)| {
-                    format!(
-                        "{url}: {} (failed: {})",
-                        ws.desync_strategy.unwrap().label(),
-                        ws.failed_strategies.len()
-                    )
+                .filter_map(|(url, ws)| {
+                    ws.desync_strategy.map(|strat| {
+                        format!(
+                            "{url}: {} (failed: {})",
+                            strat.label(),
+                            ws.failed_strategies.len()
+                        )
+                    })
                 })
                 .collect();
             if !learned.is_empty() {

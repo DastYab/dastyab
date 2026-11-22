@@ -109,8 +109,8 @@ const PRISTINE_INVERY: u32 = 5;
 fn header_comment(r: &mut impl rand::Rng) -> Vec<u8> {
     let editor = EDITORS[r.gen_range(0..EDITORS.len())];
     let note = NOTES[r.gen_range(0..NOTES.len())];
-    let d1 = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
-        + chrono::Duration::days(r.gen_range(0..900) as i64);
+    let base_date = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap_or(chrono::NaiveDate::MIN);
+    let d1 = base_date + chrono::Duration::days(r.gen_range(0..900) as i64);
     let d2 = d1 + chrono::Duration::days(r.gen_range(1..60) as i64);
     let _indent = ["  ", "    ", "\t", "   "][r.gen_range(0..4)];
     let spacer = ["\n", "\n\n", "\n", "\n\n\n"][r.gen_range(0..4)];
@@ -133,4 +133,24 @@ pub fn humanize_worker(js: &[u8]) -> Vec<u8> {
     let mut out = header_comment(&mut r);
     out.extend_from_slice(js);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn humanize_worker_preserves_empty_payload() {
+        assert!(humanize_worker(b"").is_empty());
+    }
+
+    #[test]
+    fn header_comment_renders_valid_c_style_block() {
+        let mut r = rand::rngs::StdRng::seed_from_u64(42);
+        let raw = header_comment(&mut r);
+        let text = String::from_utf8(raw).expect("header comment must be UTF-8");
+        assert!(text.starts_with("/*\n"));
+        assert!(text.contains("last verified by CI run #"));
+        assert!(text.trim_end().ends_with("*/"));
+    }
 }

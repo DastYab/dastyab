@@ -94,6 +94,7 @@ impl NodeStore {
         self.active_id.as_ref().and_then(|id| self.get(id))
     }
 
+    /// Look up a node by its short id.
     pub fn get(&self, id: &str) -> Option<&V2RayNode> {
         self.nodes.iter().find(|n| n.id == id)
     }
@@ -1116,5 +1117,45 @@ mod tests {
         assert_eq!(sum.added, 1);
         let store = load_node_store(&profile);
         assert_eq!(store.nodes[0].source, SOURCE_MANUAL);
+    }
+
+    #[test]
+    fn node_store_save_load_roundtrip_and_corrupt_fallback() {
+        let (profile, _d) = tmp_profile();
+        let mut store = NodeStore::default();
+        store.nodes.push(node("n1", Some(true)));
+        assert!(store.set_active("n1"));
+        save_node_store(&profile, &store).unwrap();
+
+        let reloaded = load_node_store(&profile);
+        assert_eq!(reloaded.nodes.len(), 1);
+        assert_eq!(reloaded.active().map(|n| n.id.as_str()), Some("n1"));
+
+        std::fs::write(node_store_path(&profile), b"{not valid json").unwrap();
+        let fallback = load_node_store(&profile);
+        assert!(fallback.nodes.is_empty());
+        assert!(fallback.active_id.is_none());
+    }
+
+    #[test]
+    fn import_v2rayn_store_rejects_malformed_json_and_missing_servers() {
+        let (profile, d) = tmp_profile();
+        let bad_json = d.path().join("bad.json");
+        std::fs::write(&bad_json, b"{broken").unwrap();
+        assert!(import_v2rayn_store(&profile, &bad_json).is_err());
+
+        let no_servers = d.path().join("no_servers.json");
+        std::fs::write(&no_servers, br#"{"other":[]}"#).unwrap();
+        assert!(import_v2rayn_store(&profile, &no_servers).is_err());
+    }
+
+    #[test]
+    fn extract_raw_params_preserves_encoded_values_and_strips_fragment() {
+        let url = "vless://u@1.2.3.4:443?security=reality&spx=%2Fpath%2F1&fp=chrome#Alias%201";
+        let params = extract_raw_params(url);
+        assert_eq!(params.get("security").map(String::as_str), Some("reality"));
+        assert_eq!(params.get("spx").map(String::as_str), Some("%2Fpath%2F1"));
+        assert_eq!(params.get("fp").map(String::as_str), Some("chrome"));
+        assert!(extract_raw_params("vless://u@1.2.3.4:443#NoQuery").is_empty());
     }
 }
