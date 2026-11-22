@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::vless::VlessProfile;
 use crate::error::CFError;
+use crate::tunnel::lion_warrior::{country_to_locale_tz, hardened_chrome_args};
 
 /// Whether this profile has a final-server chain configured.
 pub fn is_chain_configured(profile_id: &str) -> bool {
@@ -796,13 +797,8 @@ pub async fn start_tunnel_mode_for_persona(
             if let Some(chrome) = chrome {
                 let raw_hint = cfg.country_hint.trim();
                 let country = (!raw_hint.is_empty()).then_some(raw_hint);
-                let (_, tz) = crate::tunnel::lion_warrior::country_to_locale_tz(country);
-                let args = crate::tunnel::lion_warrior::hardened_chrome_args(
-                    socks_port,
-                    &prof_dir,
-                    target_url,
-                    country,
-                );
+                let (_, tz) = country_to_locale_tz(country);
+                let args = hardened_chrome_args(socks_port, &prof_dir, target_url, country);
                 let mut cmd = std::process::Command::new(chrome);
                 cmd.env("TZ", tz).args(&args);
                 let _ = cmd.spawn();
