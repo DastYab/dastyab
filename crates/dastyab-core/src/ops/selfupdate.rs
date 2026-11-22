@@ -711,7 +711,11 @@ enum SwapPlacement {
 fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
     let dir = mem_dir().join("bin");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(CFError::new("Storage error", format!("{e}"), "Check permissions."));
+        return Err(CFError::new(
+            "Storage error",
+            format!("{e}"),
+            "Check permissions.",
+        ));
     }
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));
