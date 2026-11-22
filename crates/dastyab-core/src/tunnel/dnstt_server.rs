@@ -153,11 +153,7 @@ impl DnsTunnelServer {
 /// correct.
 pub fn parse_question(pkt: &[u8]) -> Result<(u16, String, u16, u16), CFError> {
     if pkt.len() < 12 {
-        return Err(CFError::new(
-            "dnstt-server",
-            "datagram shorter than DNS header",
-            "",
-        ));
+        return Err(CFError::new("dnstt-server", "datagram shorter than DNS header", ""));
     }
     let id = u16::from_be_bytes([pkt[0], pkt[1]]);
     let qdcount = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
@@ -178,11 +174,7 @@ pub fn parse_question(pkt: &[u8]) -> Result<(u16, String, u16, u16), CFError> {
         }
         // No compression pointers are legal inside a question name.
         if len & 0xC0 != 0 {
-            return Err(CFError::new(
-                "dnstt-server",
-                "unexpected pointer in question",
-                "",
-            ));
+            return Err(CFError::new("dnstt-server", "unexpected pointer in question", ""));
         }
         let l = len as usize;
         if pos + 1 + l > pkt.len() {

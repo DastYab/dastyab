@@ -502,11 +502,7 @@ pub fn run_doctor(opts: &DoctorOptions) -> DoctorReport {
     results.push(check_token_permissions(&opts.profile_id));
 
     let state = crate::daemon::load_daemon_state(&opts.profile_id);
-    results.push(check_autosync_freshness(
-        &opts.profile_id,
-        state.last_backup_ts,
-        opts.now_unix,
-    ));
+    results.push(check_autosync_freshness(&opts.profile_id, state.last_backup_ts, opts.now_unix));
 
     results.push(check_latest_backup_verifies(&backups));
     results.push(check_disk_headroom(&mem));
@@ -525,9 +521,7 @@ pub fn run_doctor(opts: &DoctorOptions) -> DoctorReport {
     // Ledger append-only integrity (high-water vs current count). Guards
     // against silent truncation of history/token_history/generated-configs.
     let profile_dir = crate::store::profiles::profile_dir(&opts.profile_id);
-    results.extend(crate::mesh::ledger_guard::doctor_check_ledger_integrity(
-        &profile_dir,
-    ));
+    results.extend(crate::mesh::ledger_guard::doctor_check_ledger_integrity(&profile_dir));
 
     // Per-artifact versioning health (hot-path prune outcomes + dir sizes).
     // Surfaces silent prune failures before version dirs exhaust disk.

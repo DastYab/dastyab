@@ -621,12 +621,8 @@ mod tests {
     #[test]
     fn link_uses_tls_detects_security_param() {
         assert!(link_uses_tls("vless://u@1.2.3.4:443?security=tls&type=ws"));
-        assert!(link_uses_tls(
-            "vless://u@1.2.3.4:443?security=reality&type=tcp"
-        ));
-        assert!(!link_uses_tls(
-            "vless://u@1.2.3.4:443?encryption=none&type=ws"
-        ));
+        assert!(link_uses_tls("vless://u@1.2.3.4:443?security=reality&type=tcp"));
+        assert!(!link_uses_tls("vless://u@1.2.3.4:443?encryption=none&type=ws"));
         assert!(link_uses_tls("trojan://pw@1.2.3.4:443"));
         assert!(link_uses_tls("hysteria2://tok@1.2.3.4:8443"));
         assert!(link_uses_tls("tuic://uuid:tok@1.2.3.4:7780"));

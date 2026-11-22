@@ -180,11 +180,7 @@ impl SignedBundle {
     /// Verify signature and return the sender key if valid.
     pub fn verify(&self) -> Result<VerifyingKey, CFError> {
         if self.sender_pk.len() != 32 {
-            return Err(CFError::new(
-                "gossip",
-                "bad sender public key length",
-                "reject",
-            ));
+            return Err(CFError::new("gossip", "bad sender public key length", "reject"));
         }
         let vk = VerifyingKey::from_bytes(&self.sender_pk[..].try_into().unwrap())
             .map_err(|e| CFError::new("gossip", format!("bad sender public key: {e}"), "reject"))?;

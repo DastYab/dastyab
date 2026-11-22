@@ -114,7 +114,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut DastYabApp, p: &dastyab_core::store::pr
                 ));
             }
             let clear = ui
-                .add_enabled(!p.history.is_empty(), egui::Button::new("🗑 Clear config history"))
+                .add_enabled(
+                    !p.history.is_empty(),
+                    egui::Button::new("🗑 Clear config history"),
+                )
                 .on_hover_text("Delete all deploy + clean-IP records (journal is kept)");
             if clear.clicked() {
                 app.pending_action = Some(PendingDialogAction::ClearHistory);

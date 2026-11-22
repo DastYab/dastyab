@@ -711,11 +711,7 @@ enum SwapPlacement {
 fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
     let dir = mem_dir().join("bin");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(CFError::new(
-            "Storage error",
-            format!("{e}"),
-            "Check permissions.",
-        ));
+        return Err(CFError::new("Storage error", format!("{e}"), "Check permissions."));
     }
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));
@@ -967,7 +963,10 @@ mod tests {
     fn binary_kind_detects_from_exe_name() {
         let gui = BinaryKind::detect_from_exe_name("dastyab-gui-windows-amd64.exe");
         assert_eq!(gui, BinaryKind::Gui);
-        assert_eq!(BinaryKind::detect_from_exe_name("dastyab-tui"), BinaryKind::Tui);
+        assert_eq!(
+            BinaryKind::detect_from_exe_name("dastyab-tui"),
+            BinaryKind::Tui
+        );
         assert_eq!(BinaryKind::detect_from_exe_name("dastyab"), BinaryKind::Cli);
     }
 

@@ -3428,10 +3428,7 @@ async fn cmd_protection(profile: &str, action: ProtectionAction) -> Result<(), C
                 let cause = dastyab_core::diagnose::diagnose(&diag, probe);
                 println!(
                     "  Last scan: {}",
-                    dastyab_core::diagnose::plain_message(
-                        cause,
-                        dastyab_core::diagnose::Locale::En
-                    )
+                    dastyab_core::diagnose::plain_message(cause, dastyab_core::diagnose::Locale::En)
                 );
                 println!(
                     "  Recommended: {}",
@@ -5152,10 +5149,7 @@ fn cmd_mesh(
             let (table, heard) = lan_mesh::discover_once(&host, &label, upstream, window, now);
             match table.best_relay(now) {
                 Some(b) => {
-                    println!(
-                        "[mesh] relay candidate: {} @ {}",
-                        b.name, b.addr
-                    );
+                    println!("[mesh] relay candidate: {} @ {}", b.name, b.addr);
                     println!("[mesh] heard {heard} datagram(s)");
                     // Verify the hop: probe the candidate's relay port and
                     // measure RTT through it. A successful echo turns the
@@ -5667,8 +5661,7 @@ async fn cmd_configs(
             } else {
                 path.to_string()
             };
-            let (added, dups) =
-                export_v2rayn_store(profile, std::path::Path::new(&target), true)?;
+            let (added, dups) = export_v2rayn_store(profile, std::path::Path::new(&target), true)?;
             println!(
                 "[configs] exported healthy nodes to {target}: added={} duplicates-skipped={}",
                 added, dups
@@ -5974,9 +5967,7 @@ async fn cmd_dns_tunnel(profile: &str, action: crate::DnsTunnelAction) -> Result
             concurrency,
             timeout_ms,
         } => {
-            use dastyab_core::resolve_pool::{
-                discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES,
-            };
+            use dastyab_core::resolve_pool::{discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES};
             let cands: Vec<String> = match candidates {
                 Some(s) if !s.trim().is_empty() => s
                     .split(',')

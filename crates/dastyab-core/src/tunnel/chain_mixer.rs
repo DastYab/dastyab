@@ -531,11 +531,7 @@ pub fn plan_chain(
     look_up: impl Fn(&ChainElement) -> Option<String>,
 ) -> Result<PlannedChain, CFError> {
     if config.engines.is_empty() {
-        return Err(CFError::new(
-            "chain_mixer",
-            "empty chain",
-            "add at least one engine",
-        ));
+        return Err(CFError::new("chain_mixer", "empty chain", "add at least one engine"));
     }
     // De-duplicate consecutive repeats and reject > 8 layers (sanity bound).
     let mut seen = std::collections::HashSet::new();
@@ -558,11 +554,7 @@ pub fn plan_chain(
         });
     }
     if layers.len() > 8 {
-        return Err(CFError::new(
-            "chain_mixer",
-            "chain too long",
-            "max 8 layers supported",
-        ));
+        return Err(CFError::new("chain_mixer", "chain too long", "max 8 layers supported"));
     }
     // Wire upstreams: layer i forwards into layer i+1.
     let n = layers.len();

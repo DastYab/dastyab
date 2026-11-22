@@ -242,10 +242,7 @@ mod tests {
     #[test]
     fn no_regression_on_dirty_to_dirty() {
         // dirty→dirty with same set: no change.
-        assert!(!regression_events(
-            Some(action_digest(&["a"])),
-            action_digest(&["a"])
-        ));
+        assert!(!regression_events(Some(action_digest(&["a"])), action_digest(&["a"])));
     }
 
     #[test]
@@ -267,12 +264,7 @@ mod tests {
                 host_down_since_unix: 0,
             },
         );
-        assert!(auto_executable(
-            "worker_secret_rotate",
-            &cfg,
-            true,
-            3_000_000
-        ));
+        assert!(auto_executable("worker_secret_rotate", &cfg, true, 3_000_000));
     }
 
     #[test]
@@ -293,12 +285,7 @@ mod tests {
                 host_down_since_unix: 0,
             },
         );
-        assert!(!auto_executable(
-            "worker_secret_rotate",
-            &cfg,
-            false,
-            999_999
-        ));
+        assert!(!auto_executable("worker_secret_rotate", &cfg, false, 999_999));
     }
 
     #[test]

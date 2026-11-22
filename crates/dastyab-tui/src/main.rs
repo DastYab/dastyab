@@ -433,7 +433,9 @@ mod tests {
         assert!(st.ready_tag.is_none());
 
         st.checking = true;
-        let msg = Ok(UpdateOutcome::Updated { tag: "v0.9.9".to_string() });
+        let msg = Ok(UpdateOutcome::Updated {
+            tag: "v0.9.9".to_string(),
+        });
         st.tx.send(msg).unwrap();
         st.poll();
         assert!(!st.checking);

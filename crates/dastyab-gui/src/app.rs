@@ -1055,8 +1055,8 @@ impl DastYabApp {
                     Some(t) => t,
                     None => {
                         self.worker_tunnel_note = format!(
-                        "Active token '{label}' could not be read — re-add it on the Token tab."
-                    );
+                            "Active token '{label}' could not be read — re-add it on the Token tab."
+                        );
                         return;
                     }
                 }
@@ -2599,9 +2599,7 @@ impl DastYabApp {
         if !self.note.is_empty() {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.add(egui::Label::new(
-                    egui::RichText::new(&self.note).color(GOLD_DIM),
-                ));
+                ui.add(egui::Label::new(egui::RichText::new(&self.note).color(GOLD_DIM)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("✕")
@@ -2739,9 +2737,7 @@ impl DastYabApp {
                 ("🛡 PROTECTION: OFF", egui::Color32::from_rgb(220, 120, 90))
             };
             let on = ui
-                .add(egui::Button::new(
-                    egui::RichText::new(label).color(color).strong().size(16.0),
-                ))
+                .add(egui::Button::new(egui::RichText::new(label).color(color).strong().size(16.0)))
                 .clicked();
             if on {
                 // Toggle direction depends on current state.
@@ -2815,13 +2811,14 @@ impl DastYabApp {
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!self.running.contains(&"scan".to_string()), egui::Button::new(
-                    if self.running.contains(&"scan".to_string()) {
+                .add_enabled(
+                    !self.running.contains(&"scan".to_string()),
+                    egui::Button::new(if self.running.contains(&"scan".to_string()) {
                         "Scanning…"
                     } else {
                         "Scan ONE clean IP (stops on first)"
-                    },
-                ))
+                    }),
+                )
                 .clicked()
             {
                 let pid = self.profile_id.clone();
@@ -2860,8 +2857,7 @@ impl DastYabApp {
                                     // Learn the found clean IP as a seed so
                                     // future scans + autopilot bias toward its
                                     // neighbourhood (self-improving scanner).
-                                    let _ =
-                                        dastyab_core::cf::ips::learn_clean_ip(&pid, &ep);
+                                    let _ = dastyab_core::cf::ips::learn_clean_ip(&pid, &ep);
                                     let rec = VlessRecord {
                                         id: dastyab_core::store::new_id(),
                                         ts: dastyab_core::store::profiles::now_iso(),
@@ -2905,13 +2901,14 @@ impl DastYabApp {
             }
 
             if ui
-                .add_enabled(!self.running.contains(&"scan5".to_string()), egui::Button::new(
-                    if self.running.contains(&"scan5".to_string()) {
+                .add_enabled(
+                    !self.running.contains(&"scan5".to_string()),
+                    egui::Button::new(if self.running.contains(&"scan5".to_string()) {
                         "Scanning 5…"
                     } else {
                         "Scan 5 clean IPs"
-                    },
-                ))
+                    }),
+                )
                 .clicked()
             {
                 let pid = self.profile_id.clone();
@@ -2944,8 +2941,7 @@ impl DastYabApp {
                                         // Learn each found clean IP as a seed
                                         // so future scans bias toward these
                                         // neighbourhoods (self-improving).
-                                        let _ =
-                                            dastyab_core::cf::ips::learn_clean_ip(&pid, ep);
+                                        let _ = dastyab_core::cf::ips::learn_clean_ip(&pid, ep);
                                     }
                                     if let Some(base) = resolve_deployed_base_link(&pid) {
                                         let _ = set_last_deployed_base_link(&pid, &base);
@@ -3159,25 +3155,29 @@ impl DastYabApp {
                         self.configs_selected_ip = learned[0].clone();
                     }
                     ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Clean IP:").color(GOLD_DIM));
-                    egui::ComboBox::from_id_salt("cfg_fast_ip")
-                        .selected_text(&self.configs_selected_ip)
-                        .show_ui(ui, |ui| {
-                            for ip in &learned {
-                                ui.selectable_value(&mut self.configs_selected_ip, ip.clone(), ip);
-                            }
-                        });
-                    if ui
-                        .button("🧭 Create config from this clean IP")
-                        .on_hover_text(
-                            "Render share-link / v2rayN / sing-box / Clash configs pointing at this clean IP — no redeploy.",
-                        )
-                        .clicked()
-                    {
-                        let ep = self.configs_selected_ip.clone();
-                        self.create_config_from_ip(&ep);
-                    }
-                });
+                        ui.label(egui::RichText::new("Clean IP:").color(GOLD_DIM));
+                        egui::ComboBox::from_id_salt("cfg_fast_ip")
+                            .selected_text(&self.configs_selected_ip)
+                            .show_ui(ui, |ui| {
+                                for ip in &learned {
+                                    ui.selectable_value(
+                                        &mut self.configs_selected_ip,
+                                        ip.clone(),
+                                        ip,
+                                    );
+                                }
+                            });
+                        if ui
+                            .button("🧭 Create config from this clean IP")
+                            .on_hover_text(
+                                "Render share-link / v2rayN / sing-box / Clash configs pointing at this clean IP — no redeploy.",
+                            )
+                            .clicked()
+                        {
+                            let ep = self.configs_selected_ip.clone();
+                            self.create_config_from_ip(&ep);
+                        }
+                    });
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new(
@@ -3644,9 +3644,7 @@ impl DastYabApp {
                                                             );
                                                             self.state.reload_pending = true;
                                                         }
-                                                        Err(e) => {
-                                                            self.backup_output = e.explain()
-                                                        }
+                                                        Err(e) => self.backup_output = e.explain(),
                                                     }
                                                 }
                                                 if ui
@@ -3673,8 +3671,7 @@ impl DastYabApp {
                                                     .clicked()
                                                 {
                                                     ui.ctx().copy_text(b.path.clone());
-                                                    self.note =
-                                                        format!("Copied path: {}", b.path);
+                                                    self.note = format!("Copied path: {}", b.path);
                                                 }
                                                 if ui
                                                     .button("Restore → new")
@@ -3691,9 +3688,7 @@ impl DastYabApp {
                                                             );
                                                             self.state.reload_pending = true;
                                                         }
-                                                        Err(e) => {
-                                                            self.backup_output = e.explain()
-                                                        }
+                                                        Err(e) => self.backup_output = e.explain(),
                                                     }
                                                 }
                                                 if ui

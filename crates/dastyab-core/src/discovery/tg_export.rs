@@ -30,7 +30,7 @@
 //! exactly the "archived chats" reservoir the user pointed at.
 
 use crate::artifact::config_store::{import_links_bulk_source, SOURCE_TELEGRAM};
-use crate::discovery::harvest::VPN_CONFIG_FILE_EXTENSIONS;
+use crate::discovery::harvest::{extract_proxy_links, VPN_CONFIG_FILE_EXTENSIONS};
 use std::path::{Path, PathBuf};
 
 /// A `.json`/`.html` archive file that was scanned, with its landed results.
@@ -171,8 +171,7 @@ fn scan_file(profile: &str, path: &Path) -> FileScan {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let mut links =
-        crate::tunnel::lion_warrior::extract_all_config_links_from_blob(&fname, &bytes);
+    let mut links = crate::tunnel::lion_warrior::extract_all_config_links_from_blob(&fname, &bytes);
     links.sort();
     links.dedup();
 
@@ -329,7 +328,10 @@ mod tests {
 
         let harvest = harvest_export_dir(&profile, &dir);
 
-        assert_eq!(harvest.files_scanned, 4, "json, html, and .txt files scanned");
+        assert_eq!(
+            harvest.files_scanned, 4,
+            "json, html, and .txt files scanned"
+        );
         assert_eq!(
             harvest.total_found, 5,
             "2 vless + 1 trojan + 1 hy2 + 1 warp"

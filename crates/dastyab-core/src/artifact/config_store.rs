@@ -657,8 +657,7 @@ pub fn import_links_bulk_source_ts(
             summary.added += 1;
         } else {
             if let Some(ts) = *published_epoch {
-                if let Some(existing) = store.nodes.iter_mut().find(|e| same_server(&e.url, link))
-                {
+                if let Some(existing) = store.nodes.iter_mut().find(|e| same_server(&e.url, link)) {
                     if existing.published_epoch.is_none_or(|p| ts > p) {
                         existing.published_epoch = Some(ts);
                     }

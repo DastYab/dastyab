@@ -428,8 +428,18 @@ mod tests {
             );
         }
 
-        let s1_a = store.score_arm(net_a, &cand("vless-1", "xray"), AutopilotIntent::AiStudio, 10);
-        let s2_a = store.score_arm(net_a, &cand("vless-2", "xray"), AutopilotIntent::AiStudio, 10);
+        let s1_a = store.score_arm(
+            net_a,
+            &cand("vless-1", "xray"),
+            AutopilotIntent::AiStudio,
+            10,
+        );
+        let s2_a = store.score_arm(
+            net_a,
+            &cand("vless-2", "xray"),
+            AutopilotIntent::AiStudio,
+            10,
+        );
         assert!(
             s1_a > s2_a,
             "fast AI Studio clear arm must win on net_a: {s1_a} vs {s2_a}"

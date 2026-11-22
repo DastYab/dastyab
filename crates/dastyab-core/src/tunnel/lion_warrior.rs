@@ -953,10 +953,18 @@ fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
             json_str(ob, &["id"]),
         ) {
             if port > 0 && (proto.is_empty() || proto == "vmess") {
-                let encoded = base64::engine::general_purpose::STANDARD
-                    .encode(ob.to_string().as_bytes());
+                let mut vmess = ob.clone();
+                vmess["v"] = serde_json::json!("2");
+                vmess["ps"] = serde_json::json!(alias);
+                vmess["add"] = serde_json::json!(add);
+                vmess["port"] = serde_json::json!(port.to_string());
+                vmess["id"] = serde_json::json!(id);
+                if vmess.get("aid").is_none() {
+                    vmess["aid"] = serde_json::json!("0");
+                }
+                let encoded =
+                    base64::engine::general_purpose::STANDARD.encode(vmess.to_string().as_bytes());
                 out.push(format!("vmess://{encoded}"));
-                let _ = (add, alias);
                 continue;
             }
         }
@@ -1157,8 +1165,7 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
                 "net": net, "tls": if tls_val { "tls" } else { "" },
                 "sni": sni, "host": host_hdr, "path": path
             });
-            let enc =
-                base64::engine::general_purpose::STANDARD.encode(vobj.to_string().as_bytes());
+            let enc = base64::engine::general_purpose::STANDARD.encode(vobj.to_string().as_bytes());
             Some(format!("vmess://{enc}"))
         }
         "trojan" => {
@@ -2524,10 +2531,7 @@ async fn handle_socks_client(
     let mut hdr = [0u8; 2];
     client.read_exact(&mut hdr).await?;
     if hdr[0] != 0x05 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not SOCKS5",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not SOCKS5"));
     }
     let nmethods = hdr[1] as usize;
     let mut methods = vec![0u8; nmethods];
@@ -2539,10 +2543,7 @@ async fn handle_socks_client(
     if req[1] != 0x01 {
         let err_rep = [0x05u8, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
         let _ = client.write_all(&err_rep).await;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "only CONNECT",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only CONNECT"));
     }
     let target_host = match req[3] {
         0x01 => {
@@ -2565,10 +2566,7 @@ async fn handle_socks_client(
         _ => {
             let err_rep = [0x05u8, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
             let _ = client.write_all(&err_rep).await;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "bad atyp",
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad atyp"));
         }
     };
     let mut pbuf = [0u8; 2];
@@ -2693,10 +2691,7 @@ async fn dial_through_proxy(
             }
             Ok(())
         }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "unsupported native hop",
-        )),
+        _ => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported native hop")),
     }
 }
 

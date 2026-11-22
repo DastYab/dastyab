@@ -278,9 +278,7 @@ impl TunnelOpener for RealTunnelOpener<'_> {
             crate::egress::carrier_pool::CarrierKind::WorkerData
             | crate::egress::carrier_pool::CarrierKind::WorkerTunnel => {
                 let Some(cfg) = self.probe_config(ep) else {
-                    return Err(OpenError::Other(
-                        "endpoint missing worker_url/upstream".into(),
-                    ));
+                    return Err(OpenError::Other("endpoint missing worker_url/upstream".into()));
                 };
                 crate::net::connectivity::probe_worker_tunnel_live(&cfg, self.timeout).ok
             }
@@ -502,11 +500,7 @@ mod tests {
                 if ep.host == "a" {
                     let guard = lock.lock().unwrap();
                     let _ = cv
-                        .wait_timeout_while(
-                            guard,
-                            std::time::Duration::from_secs(2),
-                            |done| !*done,
-                        )
+                        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |done| !*done)
                         .unwrap();
                 } else {
                     *lock.lock().unwrap() = true;
@@ -565,12 +559,8 @@ mod tests {
     fn staggered_reselection_does_not_touch_backup_when_primary_is_fast() {
         let eps = vec![ep("primary"), ep("backup1"), ep("backup2")];
         let opener = ScriptOpener::new(vec![true, true, true]);
-        let t = execute_reselection_staggered(
-            &eps,
-            &opener,
-            std::time::Duration::from_millis(500),
-        )
-        .unwrap();
+        let t = execute_reselection_staggered(&eps, &opener, std::time::Duration::from_millis(500))
+            .unwrap();
         assert_eq!(t.endpoint.host, "primary");
         assert_eq!(
             opener.calls(),
@@ -590,11 +580,7 @@ mod tests {
                 if ep.host == "slow-or-stalled" {
                     let guard = lock.lock().unwrap();
                     let _ = cv
-                        .wait_timeout_while(
-                            guard,
-                            std::time::Duration::from_secs(2),
-                            |done| !*done,
-                        )
+                        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |done| !*done)
                         .unwrap();
                     return Err(OpenError::Timeout);
                 }

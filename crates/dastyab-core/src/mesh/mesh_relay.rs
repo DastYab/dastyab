@@ -336,9 +336,7 @@ pub fn forward_data(
         let (len, _src) = match sock.recv_from(&mut buf) {
             Ok(ok) => ok,
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                return Ok(ForwardOutcome::Error(
-                    "relay timed out (no reply)".to_string(),
-                ));
+                return Ok(ForwardOutcome::Error("relay timed out (no reply)".to_string()));
             }
             Err(e) => return Err(e),
         };
@@ -358,9 +356,7 @@ pub fn forward_data(
             }
         }
     }
-    Ok(ForwardOutcome::Error(
-        "relay timed out (no matching reply)".to_string(),
-    ))
+    Ok(ForwardOutcome::Error("relay timed out (no matching reply)".to_string()))
 }
 
 #[cfg(test)]

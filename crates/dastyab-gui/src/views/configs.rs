@@ -141,11 +141,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut crate::app::DastYabApp) -> Option<Confi
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut app.configs_fmt_filter, String::new(), "all");
                 for f in ["share-link", "v2rayN", "sing-box", "Clash"] {
-                    ui.selectable_value(
-                        &mut app.configs_fmt_filter,
-                        f.to_string(),
-                        f,
-                    );
+                    ui.selectable_value(&mut app.configs_fmt_filter, f.to_string(), f);
                 }
             });
         egui::ComboBox::from_id_salt("cfgsort")
@@ -425,10 +421,7 @@ pub fn run_action(
         }
         ConfigsAction::Rename { id, current } => {
             app.pending_action = Some(PendingDialogAction::RenameConfig(id));
-            Some(crate::dialogs::prompt_text(
-                "Rename config",
-                current.unwrap_or_default(),
-            ))
+            Some(crate::dialogs::prompt_text("Rename config", current.unwrap_or_default()))
         }
         ConfigsAction::ExportOne { id, fmt, content } => {
             let pid = app.profile_id.clone();

@@ -508,11 +508,7 @@ pub async fn send(config: &BeaconConfig, message: &str) -> Result<(), CFError> {
         }
         BeaconKind::GenericWebhook => {
             if config.chat_id_or_url.is_empty() {
-                return Err(CFError::new(
-                    "Beacon",
-                    "Webhook URL empty.",
-                    "Set a webhook URL.",
-                ));
+                return Err(CFError::new("Beacon", "Webhook URL empty.", "Set a webhook URL."));
             }
             let resp = client
                 .post(&config.chat_id_or_url)
@@ -688,24 +684,14 @@ mod tests {
 
     #[test]
     fn test_should_send_true_for_new_event() {
-        assert!(should_send(
-            BeaconEventKind::ProtectionStarted,
-            &map(),
-            1000,
-            900
-        ));
+        assert!(should_send(BeaconEventKind::ProtectionStarted, &map(), 1000, 900));
     }
 
     #[test]
     fn test_should_send_false_within_rate_limit() {
         let mut m = map();
         m.insert(BeaconEventKind::ProtectionStarted, 500);
-        assert!(!should_send(
-            BeaconEventKind::ProtectionStarted,
-            &m,
-            1000,
-            900
-        ));
+        assert!(!should_send(BeaconEventKind::ProtectionStarted, &m, 1000, 900));
     }
 
     #[test]
@@ -713,19 +699,9 @@ mod tests {
         let mut m = map();
         m.insert(BeaconEventKind::ProtectionStarted, 500);
         // 1000 - 500 = 500 < 900 → still limited.
-        assert!(!should_send(
-            BeaconEventKind::ProtectionStarted,
-            &m,
-            1000,
-            900
-        ));
+        assert!(!should_send(BeaconEventKind::ProtectionStarted, &m, 1000, 900));
         // 1400 - 500 = 900 → exactly at limit → allowed.
-        assert!(should_send(
-            BeaconEventKind::ProtectionStarted,
-            &m,
-            1400,
-            900
-        ));
+        assert!(should_send(BeaconEventKind::ProtectionStarted, &m, 1400, 900));
     }
 
     #[test]
