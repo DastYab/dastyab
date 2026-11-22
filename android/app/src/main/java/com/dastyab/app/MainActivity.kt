@@ -140,6 +140,7 @@ class MainActivity : DastyabActivity() {
     private var vpnReceiverRegistered = false
     private val postConnectGeoInFlight = AtomicBoolean(false)
     private val flowWarriorInFlight = AtomicBoolean(false)
+    private var pendingUpdateApk: File? = null
 
     private val vpnStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -591,6 +592,58 @@ class MainActivity : DastyabActivity() {
         if (intent?.getBooleanExtra(EXTRA_AUTO_CONNECT_VPN, false) == true && !DastyabVpnService.isConnected()) {
             requestStartVpn(null, null)
         }
+
+        AppAutoUpdater.cleanupStaleUpdates(this)
+        if (AppAutoUpdater.isCheckDue(this)) {
+            startBackgroundAppUpdateCheck()
+        }
+    }
+
+    private fun startBackgroundAppUpdateCheck() {
+        thread(isDaemon = true, name = "dastyab-app-autoupdate") {
+            val outcome = AppAutoUpdater.checkAndDownloadIfNeeded(applicationContext, force = false)
+            if (outcome is AppAutoUpdater.CheckOutcome.ReadyToInstall) {
+                runOnUiThread {
+                    if (UiSafety.isActivityAlive(this)) {
+                        promptApkUpdateReady(outcome)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun promptApkUpdateReady(ready: AppAutoUpdater.CheckOutcome.ReadyToInstall) {
+        pendingUpdateApk = ready.apkFile
+        postStatus(getString(R.string.app_update_ready_title, ready.remoteTag))
+        val builder = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.app_update_ready_title, ready.remoteTag))
+            .setMessage(
+                getString(
+                    R.string.app_update_ready_msg,
+                    ready.currentVersion,
+                    ready.remoteTag,
+                    ready.assetName
+                )
+            )
+            .setPositiveButton(getString(R.string.app_update_install_now)) { _, _ ->
+                if (!AppAutoUpdater.launchInstallerOrRequestPermission(this, ready.apkFile)) {
+                    Toast.makeText(
+                        this,
+                        getString(R.string.app_update_permission_msg),
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    pendingUpdateApk = null
+                }
+            }
+            .setNeutralButton(getString(R.string.app_update_skip)) { _, _ ->
+                pendingUpdateApk = null
+                AppAutoUpdater.markTagSkipped(this, ready.remoteTag)
+            }
+            .setNegativeButton(getString(R.string.app_update_later)) { _, _ ->
+                pendingUpdateApk = null
+            }
+        UiSafety.safeShowDialog(this, builder)
     }
 
     private fun showSafeModeRecoveryDialog(notice: String) {
@@ -607,6 +660,15 @@ class MainActivity : DastyabActivity() {
     override fun onResume() {
         super.onResume()
         refreshVpnCard()
+        val pending = pendingUpdateApk
+        if (pending != null && pending.isFile) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                packageManager.canRequestPackageInstalls()
+            ) {
+                pendingUpdateApk = null
+                AppAutoUpdater.launchInstallerOrRequestPermission(this, pending)
+            }
+        }
     }
 
     private fun registerVpnReceiver() {

@@ -156,7 +156,7 @@
     <string name="btn_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="settings_log_level">Minimum log file level</string>
-    <string name="settings_auto_update">Auto-update binary on app start</string>
+    <string name="settings_auto_update">Auto-update app automatically on startup</string>
     <string name="settings_clear_logs">Clear log files</string>
     <string name="settings_clear_crash_logs">Clear crash logs</string>
     <string name="settings_clear_history">Clear command history</string>
@@ -865,4 +865,54 @@
     <string name="flow_warrior_running">⚔ Flow Warrior engaging Brutal Eagle bypass…</string>
     <string name="flow_warrior_conquered">⚔ Flow Warrior ✓ (%1$s · %2$dms)</string>
     <string name="flow_warrior_retry_btn">⚔ Retry Brutal Escalation</string>
+
+    <!-- Device-Aware APK Auto-Updater -->
+    <string name="app_update_ready_title">DastYab Update Ready (%1$s)</string>
+    <string name="app_update_ready_msg">A verified update for your device (%1$s → %2$s) is ready.\n\nPackage: %3$s\n\nInstall update now?</string>
+    <string name="app_update_install_now">Install Update</string>
+    <string name="app_update_later">Later</string>
+    <string name="app_update_skip">Skip This Version</string>
+    <string name="app_update_permission_msg">Enable &quot;Allow from this source&quot; for DastYab, then return to finish installing the update.</string>
+    <string name="app_update_status_enabled">Auto-update enabled (every launch)</string>
+    <string name="app_update_status_disabled">Auto-update disabled</string>
+    <string name="app_update_status_checking">Checking GitHub Releases for this device…</string>
+    <string name="app_update_status_uptodate">Already on latest version (%1$s)</string>
+    <string name="app_update_open_releases">Open Releases Page</string>
+
+    <!-- Multi-Profile Google Accounts & Modern Browser UI -->
+    <string name="browser_close_desc">Close browser</string>
+    <string name="browser_profile_default_name">Account 1</string>
+    <string name="browser_btn_proxy_short">Proxy</string>
+    <string name="browser_btn_geo_short">Geo</string>
+    <string name="browser_btn_switch_short">AI / Flow</string>
+    <string name="browser_btn_bypass">⚡ Fix</string>
+    <string name="browser_btn_tools">⋮ More</string>
+    <string name="browser_profile_add_chip">+ Account</string>
+    <string name="browser_profile_manager_title">Google Account Profiles</string>
+    <string name="browser_profile_isolation_native">Full isolated container per account (cookies, storage &amp; sign-in kept separate).</string>
+    <string name="browser_profile_isolation_jar">Cookie-jar account isolation active (auto-swaps Google sessions when switching).</string>
+    <string name="browser_profile_new_btn">+ New Google Account</string>
+    <string name="browser_profile_signin_btn">Sign in to Google Account</string>
+    <string name="browser_profile_create_title">New Browser Account Profile</string>
+    <string name="browser_profile_name_hint">Account label (e.g. Work, Personal, Studio 2)</string>
+    <string name="browser_profile_open_signin_after">Open Google Sign-In page immediately</string>
+    <string name="browser_profile_rename_title">Rename Account Profile</string>
+    <string name="browser_profile_switched">Switched to profile: %1$s</string>
+    <string name="browser_profile_created">Created isolated profile: %1$s</string>
+    <string name="browser_profile_deleted">Removed profile: %1$s</string>
+    <string name="browser_profile_cannot_delete_last">At least one browser profile is required.</string>
+    <string name="browser_profile_session_cleared">Cleared cookies &amp; session data for %1$s</string>
+    <string name="browser_profile_delete_confirm">Remove profile &quot;%1$s&quot; and clear its isolated Google login data?</string>
+    <string name="browser_omnibar_title">Navigate or Jump To Site</string>
+    <string name="browser_omnibar_hint">Enter URL (https://aistudio.google.com)</string>
+    <string name="browser_tools_title">Browser &amp; Profile Tools</string>
+    <string name="browser_tool_profiles">Switch / Manage Google Accounts (%1$d)</string>
+    <string name="browser_tool_add_google">Sign in Another Google Account</string>
+    <string name="browser_tool_desktop_on">Desktop User-Agent: ON (tap for Mobile)</string>
+    <string name="browser_tool_desktop_off">Desktop User-Agent: OFF (tap for Desktop)</string>
+    <string name="browser_tool_rotate">Rotate VPN Layer &amp; Apply Headers</string>
+    <string name="browser_tool_dns_blackout">Toggle DNS Blackout Mode</string>
+    <string name="browser_tool_open_chrome">Open Current Page in Chrome</string>
+    <string name="browser_tool_copy_url">Copy Current URL</string>
+    <string name="browser_tool_clear_profile">Sign Out / Clear Current Profile Session</string>
 </resources>

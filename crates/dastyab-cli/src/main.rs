@@ -295,6 +295,11 @@ enum Command {
     UpdateCheck,
     /// Download & install a newer release (requires GitHub asset).
     UpdateApply,
+    /// Configure automatic self-updates (on | off | status).
+    UpdateAuto {
+        #[arg()]
+        mode: Option<String>,
+    },
 
     // ---- native clean-IP + autopilot ----
     /// Show cached Cloudflare IP-range summary (diagnostic).
@@ -1561,12 +1566,15 @@ async fn main() {
     // (core uses ring; reqwest pulls ring too — explicit install avoids
     // the "could not determine CryptoProvider" panic, e.g. on `drill`).
     dastyab_core::tls::install_tls_provider();
+    dastyab_core::selfupdate::cleanup_stale_old_binary();
 
     let cli = Cli::parse();
 
     if cli.no_stealth {
         dastyab_core::stealth::set_enabled(false);
     }
+
+    let allow_auto_update = commands::allows_cli_auto_update(&cli.command);
 
     if let Err(e) = commands::run(
         cli.profile,
@@ -1577,5 +1585,9 @@ async fn main() {
     {
         eprintln!("\u{1b}[31m✗ {}\u{1b}[0m", e.explain());
         std::process::exit(1);
+    }
+
+    if allow_auto_update {
+        commands::maybe_auto_update_after_cli().await;
     }
 }

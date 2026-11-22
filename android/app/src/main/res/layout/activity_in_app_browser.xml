@@ -5,191 +5,220 @@
     android:orientation="vertical"
     android:background="?attr/dastyabBackground">
 
-    <!-- Top Royal Gold Toolbar -->
+    <!-- Modern Floating Top Browser Header Card -->
     <LinearLayout
+        android:id="@+id/browserTopCard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
+        android:orientation="vertical"
         android:background="@drawable/header_card_background"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="6dp"
+        android:layout_marginBottom="4dp"
         android:paddingStart="10dp"
         android:paddingEnd="10dp"
         android:paddingTop="8dp"
-        android:paddingBottom="8dp">
+        android:paddingBottom="8dp"
+        android:elevation="4dp">
 
-        <Button
-            android:id="@+id/btnBrowserClose"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:text="✕"
-            android:textSize="14sp"
-            android:padding="0dp"
-            style="@style/DastyabChip" />
-
-        <com.dastyab.app.StatusHaloView
-            android:id="@+id/browserVpnDot"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:layout_marginStart="6dp"
-            android:layout_marginEnd="6dp" />
-
-        <TextView
-            android:id="@+id/tvBrowserTitle"
-            android:layout_width="0dp"
+        <!-- Row 1: Close · Live Halo + Tappable Omnibar · Active Google Profile Pill -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/simple_card_aistudio"
-            android:textColor="?attr/dastyabAccent"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <Button
-            android:id="@+id/btnBrowserProxyMode"
-            android:layout_width="wrap_content"
-            android:layout_height="34dp"
-            android:layout_marginEnd="4dp"
-            android:text="@string/browser_btn_proxy"
-            android:textSize="11sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            style="@style/DastyabChip" />
+            <Button
+                android:id="@+id/btnBrowserClose"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="0dp"
+                android:layout_marginEnd="6dp"
+                android:text="✕"
+                android:textSize="14sp"
+                android:padding="0dp"
+                android:contentDescription="@string/browser_close_desc"
+                style="@style/DastyabChip" />
 
-        <Button
-            android:id="@+id/btnBrowserAutoFix"
-            android:layout_width="wrap_content"
-            android:layout_height="34dp"
-            android:layout_marginEnd="4dp"
-            android:text="@string/browser_btn_autofix"
-            android:textSize="11sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            style="@style/DastyabChip" />
+            <!-- Omnibar Address & Title Pill -->
+            <LinearLayout
+                android:id="@+id/browserOmnibarCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/browser_omnibar_bg"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:clickable="true"
+                android:focusable="true">
 
-        <Button
-            android:id="@+id/btnBrowserOpenChrome"
-            android:layout_width="wrap_content"
-            android:layout_height="34dp"
-            android:text="@string/browser_btn_chrome"
-            android:textSize="11sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            style="@style/DastyabChip" />
-    </LinearLayout>
+                <com.dastyab.app.StatusHaloView
+                    android:id="@+id/browserVpnDot"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:layout_marginEnd="8dp" />
 
-    <!-- Live Geo & Route Banner -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="?attr/dastyabSurfaceElevated"
-        android:paddingStart="10dp"
-        android:paddingEnd="10dp"
-        android:paddingTop="5dp"
-        android:paddingBottom="5dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvBrowserRouteStatus"
-            android:layout_width="0dp"
+                    <TextView
+                        android:id="@+id/tvBrowserTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/browser_default_aistudio"
+                        android:textColor="?attr/dastyabTextPrimary"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+
+                    <TextView
+                        android:id="@+id/tvBrowserUrlSubtitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="aistudio.google.com"
+                        android:textColor="?attr/dastyabTextSecondary"
+                        android:textSize="10sp"
+                        android:singleLine="true"
+                        android:ellipsize="middle" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Active Google Account Profile Selector Pill -->
+            <LinearLayout
+                android:id="@+id/btnBrowserProfilePill"
+                android:layout_width="wrap_content"
+                android:layout_height="38dp"
+                android:layout_marginStart="6dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/browser_profile_chip_active_bg"
+                android:paddingStart="7dp"
+                android:paddingEnd="9dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:id="@+id/tvActiveProfileBadge"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:gravity="center"
+                    android:text="A"
+                    android:textColor="#110D08"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvActiveProfileName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:layout_marginEnd="3dp"
+                    android:maxWidth="78dp"
+                    android:text="@string/browser_profile_default_name"
+                    android:textColor="?attr/dastyabTextPrimary"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="▾"
+                    android:textColor="?attr/dastyabAccent"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Row 2: 1-Tap Horizontal Google Account Profile Switcher Rail -->
+        <HorizontalScrollView
+            android:id="@+id/browserProfileRailScroll"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/browser_route_checking"
-            android:textSize="11sp"
-            android:textColor="?attr/dastyabTextSecondary"
-            android:singleLine="true"
-            android:ellipsize="end" />
+            android:layout_marginTop="7dp"
+            android:scrollbars="none"
+            android:overScrollMode="never">
 
-        <Button
-            android:id="@+id/btnBrowserGeoCheck"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:layout_marginStart="6dp"
-            android:text="@string/browser_btn_geocheck"
-            android:textSize="10sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            style="@style/DastyabChip" />
+            <LinearLayout
+                android:id="@+id/browserProfileRail"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical" />
+        </HorizontalScrollView>
 
-        <Button
-            android:id="@+id/btnBrowserSwitchSite"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:layout_marginStart="4dp"
-            android:text="@string/browser_btn_switch_site"
-            android:textSize="10sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            style="@style/DastyabChip" />
+        <!-- Row 3: Live Geo & Route Status Ribbon -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/browser_route_pill_bg"
+            android:paddingStart="9dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <TextView
+                android:id="@+id/tvBrowserRouteStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/browser_route_checking"
+                android:textSize="11sp"
+                android:textColor="?attr/dastyabTextSecondary"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <Button
+                android:id="@+id/btnBrowserProxyMode"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="0dp"
+                android:text="@string/browser_btn_proxy_short"
+                android:textSize="10sp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                style="@style/DastyabChip" />
+
+            <Button
+                android:id="@+id/btnBrowserGeoCheck"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="0dp"
+                android:text="@string/browser_btn_geo_short"
+                android:textSize="10sp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                style="@style/DastyabChip" />
+
+            <Button
+                android:id="@+id/btnBrowserSwitchSite"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="0dp"
+                android:text="@string/browser_btn_switch_short"
+                android:textSize="10sp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                style="@style/DastyabChip" />
+        </LinearLayout>
     </LinearLayout>
 
-    <!-- Navigation Strip -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:background="?attr/dastyabSurface"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp">
-
-        <Button
-            android:id="@+id/btnBrowserBack"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_back"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-
-        <Button
-            android:id="@+id/btnBrowserForward"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_forward"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-
-        <Button
-            android:id="@+id/btnBrowserReload"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_reload"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-
-        <Button
-            android:id="@+id/btnBrowserRotate"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_rotate"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-
-        <Button
-            android:id="@+id/btnBrowserToggleDns"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_dns"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-
-        <Button
-            android:id="@+id/btnBrowserDesktop"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="@string/browser_btn_desktop"
-            android:textSize="11sp"
-            style="@style/DastyabChip" />
-    </LinearLayout>
-
+    <!-- Thin Accent Loading Progress Bar -->
     <ProgressBar
         android:id="@+id/browserProgress"
         style="?android:attr/progressBarStyleHorizontal"
@@ -200,10 +229,91 @@
         android:progressBackgroundTint="?attr/dastyabDivider"
         android:visibility="gone" />
 
-    <WebView
-        android:id="@+id/browserWebView"
+    <!-- Per-Profile Isolated WebView Stage -->
+    <FrameLayout
+        android:id="@+id/browserWebViewContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />
+
+    <!-- Modern Floating-Look Bottom Navigation & Actions Dock -->
+    <LinearLayout
+        android:id="@+id/browserBottomDock"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/browser_bottom_dock_bg"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:elevation="8dp">
+
+        <Button
+            android:id="@+id/btnBrowserBack"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="@string/browser_btn_back"
+            android:textSize="11sp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            style="@style/DastyabChip" />
+
+        <Button
+            android:id="@+id/btnBrowserForward"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="@string/browser_btn_forward"
+            android:textSize="11sp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            style="@style/DastyabChip" />
+
+        <Button
+            android:id="@+id/btnBrowserReload"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="@string/browser_btn_reload"
+            android:textSize="11sp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            style="@style/DastyabChip" />
+
+        <Button
+            android:id="@+id/btnBrowserAutoFix"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1.1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="@string/browser_btn_bypass"
+            android:textSize="11sp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            style="@style/DastyabChip" />
+
+        <Button
+            android:id="@+id/btnBrowserMore"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:text="@string/browser_btn_tools"
+            android:textSize="11sp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            style="@style/DastyabChip" />
+    </LinearLayout>
 
 </LinearLayout>

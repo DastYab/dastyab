@@ -98,7 +98,16 @@ class SettingsActivity : DastyabActivity() {
         }
 
         // ── Auto-update toggle ──
-        cbAutoUpdate.visibility = View.GONE
+        cbAutoUpdate.visibility = View.VISIBLE
+        cbAutoUpdate.isChecked = AppAutoUpdater.isAutoUpdateEnabled(this)
+        cbAutoUpdate.setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean ->
+            AppAutoUpdater.setAutoUpdateEnabled(this, isChecked)
+            val msg = getString(
+                if (isChecked) R.string.app_update_status_enabled else R.string.app_update_status_disabled
+            )
+            setStatus(msg)
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
 
         // ── Clear logs ──
         btnClearLogs.setOnClickListener {
@@ -128,20 +137,89 @@ class SettingsActivity : DastyabActivity() {
             setStatus(msg)
         }
 
-        // ── Force re-download binary ──
+        // ── Check & install app updates ──
         btnForceRedownload.setOnClickListener {
-            val opened = UiSafety.safeStartActivity(
-                this,
-                Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/DastYab/dastyab/releases"))
-            )
-            if (!opened) {
-                setStatus(getString(R.string.settings_releases_hint))
+            btnForceRedownload.isEnabled = false
+            setStatus(getString(R.string.app_update_status_checking))
+            kotlin.concurrent.thread(isDaemon = true, name = "dastyab-settings-update") {
+                val outcome = AppAutoUpdater.checkAndDownloadIfNeeded(applicationContext, force = true)
+                runOnUiThread {
+                    if (!UiSafety.isActivityAlive(this)) return@runOnUiThread
+                    btnForceRedownload.isEnabled = true
+                    when (outcome) {
+                        is AppAutoUpdater.CheckOutcome.UpToDate -> {
+                            val msg = getString(R.string.app_update_status_uptodate, outcome.remoteTag)
+                            setStatus(msg)
+                            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                        }
+                        is AppAutoUpdater.CheckOutcome.ReadyToInstall -> {
+                            setStatus("${outcome.remoteTag} ready: ${outcome.assetName}")
+                            pendingInstallApk = outcome.apkFile
+                            UiSafety.safeShowDialog(
+                                this,
+                                android.app.AlertDialog.Builder(this)
+                                    .setTitle(getString(R.string.app_update_ready_title, outcome.remoteTag))
+                                    .setMessage(
+                                        getString(
+                                            R.string.app_update_ready_msg,
+                                            outcome.currentVersion,
+                                            outcome.remoteTag,
+                                            outcome.assetName
+                                        )
+                                    )
+                                    .setPositiveButton(getString(R.string.app_update_install_now)) { _, _ ->
+                                        if (!AppAutoUpdater.launchInstallerOrRequestPermission(this, outcome.apkFile)) {
+                                            Toast.makeText(
+                                                this,
+                                                getString(R.string.app_update_permission_msg),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            pendingInstallApk = null
+                                        }
+                                    }
+                                    .setNeutralButton(getString(R.string.app_update_open_releases)) { _, _ ->
+                                        UiSafety.safeStartActivity(
+                                            this,
+                                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(AppAutoUpdater.RELEASE_LATEST_WEB))
+                                        )
+                                    }
+                                    .setNegativeButton(getString(R.string.app_update_later), null)
+                            )
+                        }
+                        is AppAutoUpdater.CheckOutcome.Failed -> {
+                            setStatus("${outcome.message} — opening Releases")
+                            val opened = UiSafety.safeStartActivity(
+                                this,
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(AppAutoUpdater.RELEASE_LATEST_WEB))
+                            )
+                            if (!opened) {
+                                setStatus(getString(R.string.settings_releases_hint))
+                            }
+                        }
+                    }
+                }
             }
         }
 
         // ── About ──
         btnAbout.setOnClickListener {
             UiSafety.safeStartActivity(this, Intent(this, AboutActivity::class.java))
+        }
+    }
+
+    private var pendingInstallApk: File? = null
+
+    override fun onResume() {
+        super.onResume()
+        val pending = pendingInstallApk
+        if (pending != null && pending.isFile) {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+                packageManager.canRequestPackageInstalls()
+            ) {
+                pendingInstallApk = null
+                AppAutoUpdater.launchInstallerOrRequestPermission(this, pending)
+            }
         }
     }
 

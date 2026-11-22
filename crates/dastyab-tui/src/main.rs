@@ -2,15 +2,20 @@
 //!
 //! A terminal dashboard that shares the core library. It shows a live,
 //! friendly overview of profiles, tokens, config history, clean IPs, recently
-//! generated share links, and the current application state. Navigation is
-//! minimal but functional:
+//! generated share links, automatic updates, and the current application state.
 //!
 //! * `q` / `Esc` — quit
-//! * `Tab` — cycle between the Overview / Profiles / Share-link panels
-//!
-//! For full operations (deploy, scan, DNS, routes, backup, audit) prefer the
-//! CLI (`dastyab`), which drives the same core library.
+//! * `Tab` / `1..3` — cycle between the Overview / Profiles / Share-link panels
+//! * `u` — check & apply update from GitHub Releases now
+//! * `r` — restart TUI into newly installed update (when ready)
 
+use std::io::IsTerminal as _;
+use std::sync::mpsc;
+
+use dastyab_core::selfupdate::{
+    cleanup_stale_old_binary, ensure_updated_with_swap_for, should_auto_check, BinaryKind,
+    UpdateOutcome, INTERACTIVE_CHECK_INTERVAL_SECS,
+};
 use dastyab_core::store::profiles::{list_profiles, load_profile, migrate_legacy};
 
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -20,16 +25,18 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 const GOLD: Color = Color::Rgb(212, 175, 55);
 const GOLD_DIM: Color = Color::Rgb(150, 120, 40);
+const GREEN: Color = Color::Rgb(130, 220, 145);
 const TEXT: Color = Color::Rgb(235, 228, 200);
 
 fn main() -> std::io::Result<()> {
+    dastyab_core::tls::install_tls_provider();
+    cleanup_stale_old_binary();
     let _ = migrate_legacy();
 
     // `ratatui::init()` panics with a raw backtrace ("failed to initialize
     // terminal: Os { code: 6 ... }") when stdin is not a terminal, which is
     // what happens under cron, in CI, or when output is piped. A dashboard
     // that needs a tty should say so and exit non-zero, not dump a panic.
-    use std::io::IsTerminal as _;
     if !std::io::stdin().is_terminal() {
         eprintln!("dastyab-tui: this is an interactive terminal dashboard and needs a tty.");
         eprintln!("Run it directly in your terminal, or use the CLI (`dastyab`) instead.");
@@ -39,7 +46,15 @@ fn main() -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let res = run_app(&mut terminal);
     ratatui::restore();
-    res
+    match res {
+        Ok(Some(exe)) => {
+            // Re-launch the newly updated TUI binary after restoring the terminal.
+            let _ = std::process::Command::new(exe).status();
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -49,15 +64,96 @@ enum Tab {
     Links,
 }
 
-fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+struct AutoUpdateUiState {
+    checking: bool,
+    status: String,
+    ready_tag: Option<String>,
+    rx: mpsc::Receiver<Result<UpdateOutcome, String>>,
+    tx: mpsc::Sender<Result<UpdateOutcome, String>>,
+}
+
+impl AutoUpdateUiState {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            checking: false,
+            status: format!("v{} · auto-update ready (press 'u' to check)", dastyab_core::VERSION),
+            ready_tag: None,
+            rx,
+            tx,
+        }
+    }
+
+    fn start_check(&mut self, manual: bool) {
+        if self.checking {
+            return;
+        }
+        self.checking = true;
+        self.status = if manual {
+            "Checking GitHub Releases for TUI update…".to_string()
+        } else {
+            "Background auto-update check running…".to_string()
+        };
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt
+                    .block_on(ensure_updated_with_swap_for(
+                        BinaryKind::Tui,
+                        std::time::Duration::from_secs(90),
+                    ))
+                    .map_err(|e| e.brief()),
+                Err(e) => Err(format!("runtime error: {e}")),
+            };
+            let _ = tx.send(result);
+        });
+    }
+
+    fn poll(&mut self) {
+        while let Ok(msg) = self.rx.try_recv() {
+            self.checking = false;
+            match msg {
+                Ok(UpdateOutcome::UpToDate) => {
+                    self.status = format!("v{} · up to date", dastyab_core::VERSION);
+                }
+                Ok(UpdateOutcome::Updated { tag }) => {
+                    self.ready_tag = Some(tag.clone());
+                    self.status =
+                        format!("Update {tag} installed — press 'r' to restart DastYab TUI now");
+                }
+                Ok(UpdateOutcome::Staged { tag, path }) => {
+                    self.status = format!("Update {tag} staged at {path} (read-only dir)");
+                }
+                Ok(UpdateOutcome::Failed(err)) => {
+                    self.status = format!("Update check failed: {err}");
+                }
+                Err(err) => {
+                    self.status = format!("Update check skipped: {err}");
+                }
+            }
+        }
+    }
+}
+
+fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<Option<std::path::PathBuf>> {
     let mut tab = Tab::Overview;
+    let mut updater = AutoUpdateUiState::new();
+    if should_auto_check(INTERACTIVE_CHECK_INTERVAL_SECS) {
+        updater.start_check(false);
+    }
 
     loop {
+        updater.poll();
+
         terminal.draw(|frame| {
             let area = frame.area();
-            // Vertical layout: title bar (3), tab strip (1), separator (1), body (rest).
+            // Vertical layout: title bar (2), update strip (1), tab strip (1), separator (1), body (rest).
             let constraints = [
-                Constraint::Length(3),
+                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(0),
@@ -84,6 +180,18 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
             ]));
             frame.render_widget(title, chunks[0]);
 
+            // Auto-update status bar
+            let upd_style = if updater.ready_tag.is_some() {
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(GOLD_DIM)
+            };
+            let upd_bar = Paragraph::new(Line::from(Span::styled(
+                format!(" {} ", updater.status),
+                upd_style,
+            )));
+            frame.render_widget(upd_bar, chunks[1]);
+
             // Tab strip
             let tabs = Line::from(vec![
                 tab_span(" Overview ", tab == Tab::Overview),
@@ -92,20 +200,22 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                 Span::raw("   "),
                 tab_span(" Share Links ", tab == Tab::Links),
             ]);
-            frame.render_widget(Paragraph::new(tabs), chunks[1]);
-            frame.render_widget(Block::default().borders(Borders::TOP), chunks[2]);
+            frame.render_widget(Paragraph::new(tabs), chunks[2]);
+            frame.render_widget(Block::default().borders(Borders::TOP), chunks[3]);
 
             match tab {
-                Tab::Overview => render_overview(frame, chunks[3]),
-                Tab::Profiles => render_profiles(frame, chunks[3]),
-                Tab::Links => render_links(frame, chunks[3]),
+                Tab::Overview => render_overview(frame, chunks[4], &updater),
+                Tab::Profiles => render_profiles(frame, chunks[4]),
+                Tab::Links => render_links(frame, chunks[4]),
             }
         })?;
 
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {
             if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
                 match key.code {
-                    crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc => break,
+                    crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc => {
+                        return Ok(None);
+                    }
                     crossterm::event::KeyCode::Tab => {
                         tab = match tab {
                             Tab::Overview => Tab::Profiles,
@@ -116,12 +226,17 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                     crossterm::event::KeyCode::Char('1') => tab = Tab::Overview,
                     crossterm::event::KeyCode::Char('2') => tab = Tab::Profiles,
                     crossterm::event::KeyCode::Char('3') => tab = Tab::Links,
+                    crossterm::event::KeyCode::Char('u') => updater.start_check(true),
+                    crossterm::event::KeyCode::Char('r') if updater.ready_tag.is_some() => {
+                        if let Ok(exe) = std::env::current_exe() {
+                            return Ok(Some(exe));
+                        }
+                    }
                     _ => {}
                 }
             }
         }
     }
-    Ok(())
 }
 
 fn tab_span(label: &str, active: bool) -> Span<'static> {
@@ -148,7 +263,11 @@ fn boxed(title: &str) -> Block<'static> {
         ))
 }
 
-fn render_overview(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+fn render_overview(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    updater: &AutoUpdateUiState,
+) {
     let profiles = list_profiles();
     let mut lines = vec![Line::from(Span::styled(
         "Welcome to DastYab — your Cloudflare Workers VLESS control plane.",
@@ -180,9 +299,17 @@ fn render_overview(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         format!("Clean IPs: {total_clean}"),
         Style::default().fg(TEXT),
     )));
+    lines.push(Line::from(Span::styled(
+        format!("Updates: {}", updater.status),
+        Style::default().fg(if updater.ready_tag.is_some() {
+            GREEN
+        } else {
+            TEXT
+        }),
+    )));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        "Keyboard: 1/2/3 or Tab = switch panel · q/Esc = quit",
+        "Keyboard: 1/2/3 or Tab = panel · u = check/update · r = restart · q/Esc = quit",
         Style::default().fg(GOLD_DIM),
     )));
     lines.push(Line::from(Span::styled(
@@ -297,4 +424,28 @@ fn render_links(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
 
     let widget = Paragraph::new(lines).block(boxed(" Recent Share Links "));
     frame.render_widget(widget, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_update_ui_state_transitions_on_messages() {
+        let mut st = AutoUpdateUiState::new();
+        assert!(!st.checking);
+        assert!(st.ready_tag.is_none());
+
+        st.checking = true;
+        let msg = Ok(UpdateOutcome::Updated { tag: "v0.9.9".to_string() });
+        st.tx.send(msg).unwrap();
+        st.poll();
+        assert!(!st.checking);
+        assert_eq!(st.ready_tag.as_deref(), Some("v0.9.9"));
+        assert!(st.status.contains("v0.9.9"));
+
+        st.tx.send(Ok(UpdateOutcome::UpToDate)).unwrap();
+        st.poll();
+        assert!(st.status.contains("up to date"));
+    }
 }

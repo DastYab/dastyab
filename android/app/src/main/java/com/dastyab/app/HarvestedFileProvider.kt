@@ -11,19 +11,32 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Self-contained read-only [ContentProvider] serving downloaded VPN config files
- * (`.ovpn`, `.openvpn`, `.npvs`, `.npv4`, `.hc`, `.custom`, `.costum`, `.ehi`, `.conf`, `.dark`, `.hat`, `.tls`)
- * with accurate display names & extensions so external VPN apps import them directly.
+ * Self-contained read-only [ContentProvider] serving:
+ *  • Downloaded VPN config files under `filesDir/vault/`
+ *  • Verified APK self-update installers under `filesDir/updates/` (`.../updates/<apk>`)
+ * with accurate display names & sizes so external VPN apps and Android's PackageInstaller
+ * can open them cleanly via `content://com.dastyab.app.filevault/...`.
  */
 class HarvestedFileProvider : ContentProvider() {
 
     companion object {
         const val AUTHORITY = "com.dastyab.app.filevault"
+        const val UPDATES_PATH_PREFIX = "updates"
+        private const val APK_MIME = "application/vnd.android.package-archive"
 
         fun uriForFile(file: File): Uri {
             return Uri.Builder()
                 .scheme("content")
                 .authority(AUTHORITY)
+                .appendPath(file.name)
+                .build()
+        }
+
+        fun uriForUpdateFile(file: File): Uri {
+            return Uri.Builder()
+                .scheme("content")
+                .authority(AUTHORITY)
+                .appendPath(UPDATES_PATH_PREFIX)
                 .appendPath(file.name)
                 .build()
         }
@@ -53,6 +66,12 @@ class HarvestedFileProvider : ContentProvider() {
     }
 
     override fun getType(uri: Uri): String {
+        val segments = uri.pathSegments
+        if (segments.firstOrNull() == UPDATES_PATH_PREFIX ||
+            uri.lastPathSegment?.lowercase()?.endsWith(".apk") == true
+        ) {
+            return APK_MIME
+        }
         val ext = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase().orEmpty()
         return ConfigFileHarvester.mimeTypeForExtension(ext)
     }
@@ -68,15 +87,23 @@ class HarvestedFileProvider : ContentProvider() {
 
     private fun resolveFile(uri: Uri): File? {
         val ctx = context ?: return null
-        val segment = uri.lastPathSegment?.trim().orEmpty()
-        if (segment.isEmpty() || segment.contains("..") || segment.contains('/') || segment.contains('\\')) {
+        val segments = uri.pathSegments
+        val (baseDir, fileName) = when {
+            segments.size == 2 && segments[0] == UPDATES_PATH_PREFIX -> {
+                File(ctx.filesDir, UPDATES_PATH_PREFIX) to segments[1].trim()
+            }
+            segments.size == 1 -> {
+                File(ctx.filesDir, ConfigFileHarvester.VAULT_DIR_NAME) to segments[0].trim()
+            }
+            else -> return null
+        }
+        if (fileName.isEmpty() || fileName.contains("..") || fileName.contains('/') || fileName.contains('\\')) {
             return null
         }
-        val vaultDir = File(ctx.filesDir, ConfigFileHarvester.VAULT_DIR_NAME)
-        val candidate = File(vaultDir, segment)
+        val candidate = File(baseDir, fileName)
         if (!candidate.isFile) return null
-        val canonicalVault = runCatching { vaultDir.canonicalPath }.getOrNull() ?: return null
+        val canonicalBase = runCatching { baseDir.canonicalPath }.getOrNull() ?: return null
         val canonicalFile = runCatching { candidate.canonicalPath }.getOrNull() ?: return null
-        return if (canonicalFile.startsWith("$canonicalVault/")) candidate else null
+        return if (canonicalFile.startsWith("$canonicalBase/")) candidate else null
     }
 }

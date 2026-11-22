@@ -316,6 +316,11 @@ pub struct DastYabApp {
     pub cleanip_add_draft: String,
     // token-history ledger search filter
     pub token_history_search: String,
+    // desktop app auto-update (BinaryKind::Gui)
+    pub auto_update_enabled: bool,
+    pub update_ready_tag: Option<String>,
+    pub update_staged_path: Option<String>,
+    pub update_status: String,
 }
 
 /// What to do when the open dialog submits.
@@ -605,8 +610,17 @@ impl DastYabApp {
             backup_sort: BackupSort::default(),
             token_history_filter: String::new(),
             log_auto_scroll: true,
+            auto_update_enabled: dastyab_core::selfupdate::auto_update_enabled(),
+            update_ready_tag: None,
+            update_staged_path: None,
+            update_status: format!("Up to date (v{})", dastyab_core::VERSION),
         };
         app.refresh_diagnostics();
+        if dastyab_core::selfupdate::should_auto_check(
+            dastyab_core::selfupdate::INTERACTIVE_CHECK_INTERVAL_SECS,
+        ) {
+            app.spawn_selfupdate(false);
+        }
         app
     }
 
@@ -1411,6 +1425,9 @@ impl DastYabApp {
                             self.push_log(&format!("[done] {task}: {summary}"));
                             self.state.reload_pending = true;
                         }
+                        "selfupdate" => {
+                            self.apply_selfupdate_summary(&summary);
+                        }
                         _ => {
                             if task.starts_with("probe-") || task == "probe-all" {
                                 self.cleanip_test_output = summary.clone();
@@ -1883,11 +1900,11 @@ impl DastYabApp {
                             } else {
                                 match std::fs::read(&path) {
                                     Ok(bytes) => {
+                                        use dastyab_core::lion_warrior as lw;
                                         let fname = path
                                             .file_name()
                                             .and_then(|n| n.to_str())
                                             .unwrap_or("configs.txt");
-                                        use dastyab_core::lion_warrior as lw;
                                         let links = lw::extract_all_config_links_from_blob(
                                             fname, &bytes,
                                         );
@@ -2579,6 +2596,42 @@ impl DastYabApp {
                 });
         }
 
+        if let Some(tag) = self.update_ready_tag.clone() {
+            ui.add_space(4.0);
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(16, 48, 26))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 190, 110)))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let msg = if let Some(path) = &self.update_staged_path {
+                            format!(
+                                "⬇ Update {tag} verified and staged at {path} (install dir is read-only)."
+                            )
+                        } else {
+                            format!(
+                                "⬇ DastYab GUI {tag} downloaded & verified — restart to switch to the new version."
+                            )
+                        };
+                        ui.label(
+                            egui::RichText::new(msg).color(egui::Color32::from_rgb(180, 245, 195)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("✕")
+                                .on_hover_text("Dismiss update banner")
+                                .clicked()
+                            {
+                                self.update_ready_tag = None;
+                            }
+                            let can_restart = self.update_staged_path.is_none();
+                            if can_restart && ui.button("↻ Restart Now").clicked() {
+                                self.restart_into_updated_app(ui.ctx());
+                            }
+                        });
+                    });
+                });
+        }
+
         if !self.note.is_empty() {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -2595,6 +2648,79 @@ impl DastYabApp {
                     }
                 });
             });
+        }
+    }
+
+    fn spawn_selfupdate(&mut self, manual: bool) {
+        if self.running.iter().any(|t| t == "selfupdate") {
+            return;
+        }
+        self.running.push("selfupdate".to_string());
+        self.update_status = if manual {
+            "Checking GitHub Releases for updates…".to_string()
+        } else {
+            "Checking for updates in background…".to_string()
+        };
+        let tx = self.tx.clone();
+        bridge::spawn("selfupdate", tx, async move {
+            use dastyab_core::selfupdate::{
+                ensure_updated_with_swap_for, BinaryKind, UpdateOutcome,
+            };
+            let timeout = std::time::Duration::from_secs(if manual { 90 } else { 30 });
+            let msg = match ensure_updated_with_swap_for(BinaryKind::Gui, timeout).await {
+                Ok(UpdateOutcome::UpToDate) => format!("UP_TO_DATE::{manual}"),
+                Ok(UpdateOutcome::Updated { tag }) => format!("UPDATED::{tag}"),
+                Ok(UpdateOutcome::Staged { tag, path }) => format!("STAGED::{tag}::{path}"),
+                Ok(UpdateOutcome::Failed(err)) => format!("FAILED::{manual}::{err}"),
+                Err(e) => format!("FAILED::{manual}::{}", e.brief()),
+            };
+            Ok::<String, CFError>(msg)
+        });
+    }
+
+    fn apply_selfupdate_summary(&mut self, summary: &str) {
+        if let Some(tag) = summary.strip_prefix("UPDATED::") {
+            self.update_ready_tag = Some(tag.to_string());
+            self.update_staged_path = None;
+            self.update_status = format!("Updated to {tag} — restart to apply.");
+            self.note = format!("✓ DastYab GUI updated to {tag}. Click Restart Now.");
+            self.push_log(&format!("[selfupdate] installed {tag}"));
+        } else if let Some(rest) = summary.strip_prefix("STAGED::") {
+            let mut parts = rest.splitn(2, "::");
+            let tag = parts.next().unwrap_or("");
+            let path = parts.next().unwrap_or("");
+            self.update_ready_tag = Some(tag.to_string());
+            self.update_staged_path = Some(path.to_string());
+            self.update_status = format!("Verified {tag} staged at {path}");
+            self.push_log(&format!("[selfupdate] staged {tag} at {path}"));
+        } else if let Some(manual_str) = summary.strip_prefix("UP_TO_DATE::") {
+            self.update_status = format!("Up to date (v{})", dastyab_core::VERSION);
+            if manual_str == "true" {
+                self.note = format!("✓ You are on the latest version (v{}).", dastyab_core::VERSION);
+            }
+            self.push_log("[selfupdate] up to date");
+        } else if let Some(rest) = summary.strip_prefix("FAILED::") {
+            let mut parts = rest.splitn(2, "::");
+            let manual_str = parts.next().unwrap_or("false");
+            let err = parts.next().unwrap_or("update check failed");
+            self.update_status = format!("Update check notice: {err}");
+            if manual_str == "true" {
+                self.note = format!("⚠ Update check: {err}");
+            }
+            self.push_log(&format!("[selfupdate] {err}"));
+        }
+    }
+
+    fn restart_into_updated_app(&mut self, ctx: &egui::Context) {
+        if let Ok(exe) = std::env::current_exe() {
+            match std::process::Command::new(&exe).spawn() {
+                Ok(_) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => {
+                    self.note = format!("Updated on disk, restart manually ({e}).");
+                }
+            }
         }
     }
 
@@ -3324,6 +3450,47 @@ impl DastYabApp {
                         .color(TEXT)
                         .strong(),
                 );
+            });
+        });
+
+        // Automatic self-update (GitHub Releases).
+        crate::views::section_card(ui, "Automatic updates (GitHub Releases)", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Installed version:").color(GOLD_DIM));
+                ui.label(
+                    egui::RichText::new(format!("v{}", dastyab_core::VERSION))
+                        .color(TEXT)
+                        .strong(),
+                );
+                if ui.checkbox(&mut self.auto_update_enabled, "Auto-update on launch").changed() {
+                    if let Err(e) = dastyab_core::selfupdate::set_auto_update_enabled(
+                        self.auto_update_enabled,
+                    ) {
+                        self.note = e.brief();
+                    } else {
+                        self.note = if self.auto_update_enabled {
+                            "Auto-update enabled.".to_string()
+                        } else {
+                            "Auto-update disabled.".to_string()
+                        };
+                    }
+                }
+            });
+            ui.label(egui::RichText::new(&self.update_status).color(GOLD_DIM).small());
+            ui.horizontal(|ui| {
+                let busy = self.running.iter().any(|t| t == "selfupdate");
+                if ui
+                    .add_enabled(!busy, egui::Button::new("⬇ Check & Update Now"))
+                    .clicked()
+                {
+                    self.spawn_selfupdate(true);
+                }
+                if self.update_ready_tag.is_some()
+                    && self.update_staged_path.is_none()
+                    && ui.button("↻ Restart Now").clicked()
+                {
+                    self.restart_into_updated_app(ui.ctx());
+                }
             });
         });
 
@@ -5173,6 +5340,10 @@ mod tests {
             cleanip_test_output: String::new(),
             cleanip_add_draft: String::new(),
             token_history_search: String::new(),
+            auto_update_enabled: true,
+            update_ready_tag: None,
+            update_staged_path: None,
+            update_status: String::new(),
         };
         (app, tx)
     }
@@ -5392,6 +5563,10 @@ mod tests {
                 cleanip_test_output: String::new(),
                 cleanip_add_draft: String::new(),
                 token_history_search: String::new(),
+                auto_update_enabled: true,
+                update_ready_tag: None,
+                update_staged_path: None,
+                update_status: String::new(),
             };
             app.state.reload();
 
@@ -5554,6 +5729,10 @@ mod tests {
                 cleanip_test_output: String::new(),
                 cleanip_add_draft: String::new(),
                 token_history_search: String::new(),
+                auto_update_enabled: true,
+                update_ready_tag: None,
+                update_staged_path: None,
+                update_status: String::new(),
             };
 
             // A background task completes while we're on the Dashboard tab.
@@ -5755,6 +5934,10 @@ mod tests {
                 cleanip_test_output: String::new(),
                 cleanip_add_draft: String::new(),
                 token_history_search: String::new(),
+                auto_update_enabled: true,
+                update_ready_tag: None,
+                update_staged_path: None,
+                update_status: String::new(),
             };
 
             // The retry succeeds.
@@ -6090,5 +6273,23 @@ mod tests {
         // Identical text within the TTL (now anchored at the write) stays.
         DastYabApp::expire_status_note(&mut text, &mut hash, &mut since, true, 90);
         assert_eq!(text, "Deploy failed: brand new");
+    }
+
+    #[test]
+    fn gui_selfupdate_bridge_events_update_banner_state() {
+        with_home(|pid| {
+            let (mut app, tx) = test_app(pid, vec!["selfupdate".into()]);
+            tx.send(crate::bridge::UiEvent::Done {
+                task: "selfupdate".into(),
+                summary: "UPDATED::v0.9.5".into(),
+            })
+            .unwrap();
+            let ctx = egui::Context::default();
+            app.poll_bridge(&ctx);
+            assert!(app.running.is_empty());
+            assert_eq!(app.update_ready_tag.as_deref(), Some("v0.9.5"));
+            assert!(app.update_staged_path.is_none());
+            assert!(app.update_status.contains("v0.9.5"));
+        });
     }
 }

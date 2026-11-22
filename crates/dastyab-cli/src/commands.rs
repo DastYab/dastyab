@@ -15,10 +15,72 @@ use dastyab_core::{CFError, BRAND, VERSION};
 use std::path::PathBuf;
 
 use crate::{
-    BackupAction, CleanipAction, Command, DaemonAction, DnsAction, ProtectionAction, RoutesAction,
-    SnapshotsAction, WorkspaceAction,
+    BackupAction, CleanipAction, Command, ConfigAction, ConfigsAction, DaemonAction, DnsAction,
+    ProtectionAction, RoutesAction, SnapshotsAction, VersionsAction, WorkspaceAction,
 };
 use dastyab_core::remote_beacon::BeaconConfig;
+
+/// Returns `false` for machine-readable (`--json`/`--quiet`/export), daemon,
+/// or explicit update commands so auto-update checks never pollute scripted
+/// stdout/stderr or duplicate explicit update work.
+pub fn allows_cli_auto_update(cmd: &Command) -> bool {
+    match cmd {
+        Command::UpdateCheck
+        | Command::UpdateApply
+        | Command::UpdateAuto { .. }
+        | Command::Daemon { .. }
+        | Command::ProfileExport { .. }
+        | Command::Export { .. } => false,
+        Command::Find { json, quiet, .. } => !*json && !*quiet,
+        Command::Inventory { json, .. }
+        | Command::Doctor { json }
+        | Command::Health { json } => !*json,
+        Command::Cleanip {
+            action: CleanipAction::List { json, .. },
+        } => !*json,
+        Command::Configs {
+            action: ConfigsAction::List { json, .. },
+        } => !*json,
+        Command::Versions {
+            action: VersionsAction::Verify { json, .. },
+        } => !*json,
+        Command::Config {
+            action: ConfigAction::Show { json },
+        } => !*json,
+        _ => true,
+    }
+}
+
+/// Quietly check & apply a binary update once per `AUTO_UPDATE_INTERVAL_SECS`
+/// after interactive CLI commands when auto-update is enabled. Never fails or
+/// prints to stdout.
+pub async fn maybe_auto_update_after_cli() {
+    if !dastyab_core::selfupdate::should_auto_check(
+        dastyab_core::selfupdate::AUTO_UPDATE_INTERVAL_SECS,
+    ) {
+        return;
+    }
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        dastyab_core::selfupdate::ensure_updated_with_swap_for(
+            dastyab_core::selfupdate::BinaryKind::Cli,
+            std::time::Duration::from_secs(5),
+        ),
+    )
+    .await;
+    match res {
+        Ok(Ok(dastyab_core::selfupdate::UpdateOutcome::Updated { tag })) => {
+            eprintln!("[dastyab] Auto-updated CLI to {tag} (active on next command).");
+        }
+        Ok(Ok(dastyab_core::selfupdate::UpdateOutcome::Staged { tag, path })) => {
+            eprintln!("[dastyab] Verified update {tag} staged at {path} (read-only dir).");
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) | Err(_) => {
+            dastyab_core::selfupdate::mark_auto_checked(None, None, None);
+        }
+    }
+}
 /// Run a command. `profile` is the active profile id.
 pub async fn run(
     profile: String,
@@ -175,6 +237,7 @@ pub async fn run(
         Command::Presets => presets_cmd(),
         Command::UpdateCheck => update_check().await,
         Command::UpdateApply => update_apply().await,
+        Command::UpdateAuto { mode } => update_auto(mode),
 
         // ---- native clean-IP + autopilot ----
         Command::Ranges => cmd_ranges(),
@@ -2647,20 +2710,69 @@ fn presets_cmd() -> Result<(), CFError> {
 }
 
 async fn update_check() -> Result<(), CFError> {
+    let auto_state = if dastyab_core::selfupdate::auto_update_enabled() {
+        "enabled"
+    } else {
+        "disabled"
+    };
     match dastyab_core::selfupdate::update_available(std::time::Duration::from_secs(12)).await? {
         (true, Some(tag)) => {
-            println!("An update is available: {tag} (current {VERSION}).");
-            println!("Run `dastyab update-apply` to download it.");
+            println!("Update available: {tag} (current {VERSION}, auto-update: {auto_state}).");
+            println!("Run `dastyab update-apply` to install it now.");
         }
-        _ => println!("You are on the latest version ({VERSION})."),
+        _ => println!("You are on the latest version ({VERSION}, auto-update: {auto_state})."),
     }
     Ok(())
 }
 
 async fn update_apply() -> Result<(), CFError> {
-    let msg = dastyab_core::selfupdate::apply_update(std::time::Duration::from_secs(120)).await?;
+    let msg = dastyab_core::selfupdate::apply_update_for(
+        dastyab_core::selfupdate::BinaryKind::Cli,
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
     println!("{msg}");
     Ok(())
+}
+
+fn update_auto(mode: Option<String>) -> Result<(), CFError> {
+    match mode.as_deref().map(str::trim) {
+        None | Some("status") => {
+            let prefs = dastyab_core::selfupdate::load_auto_update_prefs();
+            let env_off = !dastyab_core::selfupdate::auto_update_enabled() && prefs.enabled;
+            println!(
+                "Auto-update: {}{}",
+                if prefs.enabled { "enabled" } else { "disabled" },
+                if env_off {
+                    " (overridden off by DASTYAB_NO_AUTO_UPDATE)"
+                } else {
+                    ""
+                }
+            );
+            if let Some(tag) = prefs.last_applied_tag.as_deref() {
+                println!("Last applied: {tag}");
+            }
+            if let Some(note) = prefs.last_note.as_deref() {
+                println!("Last status : {note}");
+            }
+            Ok(())
+        }
+        Some("on" | "enable" | "true" | "1") => {
+            dastyab_core::selfupdate::set_auto_update_enabled(true)?;
+            println!("Auto-update enabled.");
+            Ok(())
+        }
+        Some("off" | "disable" | "false" | "0") => {
+            dastyab_core::selfupdate::set_auto_update_enabled(false)?;
+            println!("Auto-update disabled.");
+            Ok(())
+        }
+        Some(other) => Err(CFError::new(
+            "Invalid mode",
+            format!("Unknown update-auto mode '{other}'."),
+            "Use `on`, `off`, or `status`.",
+        )),
+    }
 }
 
 /// Expand a leading `~` to the user's home dir (for CLI path args).
@@ -3527,11 +3639,13 @@ async fn daemon_loop(cfg: dastyab_core::daemon::DaemonConfig) -> Result<(), CFEr
         // download it, and atomically swap it over the running binary. If an
         // update was applied, re-exec ourselves so the new version takes over
         // without a manual restart. Best-effort — never fail the loop.
-        if dastyab_core::store::now_ts() as i64 - state.last_update_check_ts
-            >= dastyab_core::selfupdate::AUTO_UPDATE_INTERVAL_SECS as i64
+        if dastyab_core::selfupdate::auto_update_enabled()
+            && dastyab_core::store::now_ts() as i64 - state.last_update_check_ts
+                >= dastyab_core::selfupdate::AUTO_UPDATE_INTERVAL_SECS as i64
         {
             state.last_update_check_ts = dastyab_core::store::now_ts() as i64;
-            match dastyab_core::selfupdate::ensure_updated_with_swap(
+            match dastyab_core::selfupdate::ensure_updated_with_swap_for(
+                dastyab_core::selfupdate::BinaryKind::Cli,
                 std::time::Duration::from_secs(120),
             )
             .await
@@ -3557,6 +3671,15 @@ async fn daemon_loop(cfg: dastyab_core::daemon::DaemonConfig) -> Result<(), CFEr
                         .stderr(std::process::Stdio::null())
                         .spawn();
                     return Ok(());
+                }
+                Ok(dastyab_core::selfupdate::UpdateOutcome::Staged { tag, path }) => {
+                    daemon_log_append(
+                        &cfg.log_path,
+                        &log_line(
+                            "INFO",
+                            &format!("auto-update {tag} staged at {path} (install dir read-only)"),
+                        ),
+                    );
                 }
                 Ok(dastyab_core::selfupdate::UpdateOutcome::Failed(msg)) => {
                     daemon_log_append(
@@ -7030,5 +7153,15 @@ mod tests {
             cleanip_cmd(&id, CleanipAction::Clear).unwrap();
             assert!(clean_ip_meta(&id).is_empty());
         });
+    }
+
+    #[test]
+    fn cli_auto_update_skips_json_and_quiet_commands() {
+        assert!(allows_cli_auto_update(&Command::Status));
+        assert!(!allows_cli_auto_update(&Command::UpdateCheck));
+        assert!(!allows_cli_auto_update(&Command::UpdateApply));
+        assert!(!allows_cli_auto_update(&Command::Doctor { json: true }));
+        assert!(allows_cli_auto_update(&Command::Doctor { json: false }));
+        assert!(!allows_cli_auto_update(&Command::Health { json: true }));
     }
 }

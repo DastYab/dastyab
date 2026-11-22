@@ -12,6 +12,7 @@ mod views;
 fn main() -> eframe::Result {
     // Install the process-level rustls provider before any network/TLS work.
     dastyab_core::tls::install_tls_provider();
+    dastyab_core::selfupdate::cleanup_stale_old_binary();
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(

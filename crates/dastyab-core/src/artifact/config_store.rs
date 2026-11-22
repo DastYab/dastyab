@@ -529,6 +529,8 @@ pub fn export_v2rayn_store(
 pub const SOURCE_TELEGRAM: &str = "telegram";
 pub const SOURCE_GITHUB: &str = "github";
 pub const SOURCE_PASTED: &str = "pasted";
+/// Source label recorded when a user imports configs manually from a local file.
+pub const SOURCE_MANUAL: &str = "manual";
 /// Node provenance for configs recovered from verified CT-log egress anchors
 /// (doctrine §8.1) — the out-of-band reseed source.
 pub const SOURCE_CT_ANCHOR: &str = "ct-anchor";
@@ -1101,5 +1103,19 @@ mod tests {
         // The anchor must still be present and active.
         assert!(final_store.nodes.iter().any(|n| n.id == "anchor"));
         assert_eq!(final_store.active_id.as_deref(), Some("anchor"));
+    }
+
+    #[test]
+    fn manual_source_constant_persists_provenance() {
+        assert_eq!(SOURCE_MANUAL, "manual");
+        let (profile, _d) = tmp_profile();
+        let links = vec![
+            "vless://00000000-0000-0000-0000-000000000001@198.51.100.1:443?type=tcp#manual-one"
+                .to_string(),
+        ];
+        let sum = import_links_bulk_source(&profile, &links, SOURCE_MANUAL).unwrap();
+        assert_eq!(sum.added, 1);
+        let store = load_node_store(&profile);
+        assert_eq!(store.nodes[0].source, SOURCE_MANUAL);
     }
 }
