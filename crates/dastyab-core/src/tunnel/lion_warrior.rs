@@ -1886,10 +1886,7 @@ async fn handle_socks_client(
     let mut hdr = [0u8; 2];
     client.read_exact(&mut hdr).await?;
     if hdr[0] != 0x05 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not SOCKS5",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not SOCKS5"));
     }
     let nmethods = hdr[1] as usize;
     let mut methods = vec![0u8; nmethods];
@@ -1901,10 +1898,7 @@ async fn handle_socks_client(
     if req[1] != 0x01 {
         let err_rep = [0x05u8, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
         let _ = client.write_all(&err_rep).await;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "only CONNECT",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only CONNECT"));
     }
     let target_host = match req[3] {
         0x01 => {
@@ -1927,10 +1921,7 @@ async fn handle_socks_client(
         _ => {
             let err_rep = [0x05u8, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
             let _ = client.write_all(&err_rep).await;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "bad atyp",
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad atyp"));
         }
     };
     let mut pbuf = [0u8; 2];
@@ -2055,10 +2046,7 @@ async fn dial_through_proxy(
             }
             Ok(())
         }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "unsupported native hop",
-        )),
+        _ => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported native hop")),
     }
 }
 
@@ -2159,23 +2147,21 @@ mod tests {
 
     #[test]
     fn evaluators_detect_geoblock_markers_and_shell() {
-        assert!(
-            !evaluate_lion_response(200, "https://aistudio.google.com/unsupported-country", "").0
-        );
+        let bad_url = "https://aistudio.google.com/unsupported-country";
+        let blocked = evaluate_lion_response(200, bad_url, "");
+        assert!(!blocked.0);
+
         let ai_url = "https://aistudio.google.com/";
-        assert!(evaluate_lion_response(200, ai_url, "<html>app</html>").0);
-        assert!(
-            !evaluate_warrior_response(200, "https://flow.google.com/", "<html>nope</html>", true).0
-        );
-        assert!(
-            evaluate_warrior_response(
-                200,
-                "https://flow.google.com/",
-                "<html>AiSandboxAngularFrontend</html>",
-                true
-            )
-            .0
-        );
+        let ai_ok = evaluate_lion_response(200, ai_url, "<html>app</html>");
+        assert!(ai_ok.0);
+
+        let flow_url = "https://flow.google.com/";
+        let no_shell = evaluate_warrior_response(200, flow_url, "<html>nope</html>", true);
+        assert!(!no_shell.0);
+
+        let flow_body = "<html>AiSandboxAngularFrontend</html>";
+        let with_shell = evaluate_warrior_response(200, flow_url, flow_body, true);
+        assert!(with_shell.0);
     }
 
     #[test]
