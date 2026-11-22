@@ -850,6 +850,22 @@ pub fn build_xray_chain_config(
         .map_err(|e| CFError::new("chain", format!("serialize xray chain: {e}"), ""))
 }
 
+fn parse_wg_addresses(raw: Option<&str>) -> Vec<String> {
+    if let Some(s) = raw {
+        let mut out = Vec::new();
+        for part in s.split(',') {
+            let item = part.trim();
+            if !item.is_empty() {
+                out.push(item.to_string());
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    vec!["172.16.0.2/32".to_string()]
+}
+
 fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serde_json::Value {
     let mut out = match hop.scheme {
         HopScheme::Vless => {
@@ -917,12 +933,8 @@ fn hop_to_xray_outbound(hop: &ChainHop, tag: &str, dialer: Option<&str>) -> serd
             })
         }
         HopScheme::WireGuard => {
-            let addr = hop
-                .params
-                .get("address")
-                .filter(|s| !s.is_empty())
-                .map(|s| s.split(',').map(|x| x.trim().to_string()).collect::<Vec<_>>())
-                .unwrap_or_else(|| vec!["172.16.0.2/32".to_string()]);
+            let raw_addr = hop.params.get("address").map(String::as_str);
+            let addr = parse_wg_addresses(raw_addr);
             let mtu_raw = hop.params.get("mtu").and_then(|s| s.parse::<u16>().ok());
             let mtu = mtu_raw.unwrap_or(1280);
             serde_json::json!({
@@ -2177,14 +2189,20 @@ mod tests {
 
     #[test]
     fn isolated_blacklists_do_not_bleed_between_lion_and_warrior() {
+        struct MemDirGuard;
+        impl Drop for MemDirGuard {
+            fn drop(&mut self) {
+                crate::store::clear_mem_dir_override();
+            }
+        }
         let dir = tempfile::tempdir().unwrap();
         crate::store::set_mem_dir_override(dir.path().join(".dastyab"));
+        let _guard = MemDirGuard;
         let pid = crate::store::profiles::create_profile("lw-iso", "t").unwrap();
         let ex = "1.2.3.4:443";
         record_blocked_exit(&pid, ServicePersona::WarriorFlow, ex);
         assert!(is_exit_blacklisted(&pid, ServicePersona::WarriorFlow, ex));
         assert!(!is_exit_blacklisted(&pid, ServicePersona::LionAiStudio, ex));
-        crate::store::clear_mem_dir_override();
     }
 
     #[test]
