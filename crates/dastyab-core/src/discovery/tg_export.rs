@@ -149,9 +149,7 @@ fn is_supported_export_file(path: &Path) -> bool {
         return false;
     };
     let lower = ext.to_ascii_lowercase();
-    lower == "html"
-        || lower == "htm"
-        || VPN_CONFIG_FILE_EXTENSIONS.iter().any(|e| *e == lower)
+    lower == "html" || lower == "htm" || VPN_CONFIG_FILE_EXTENSIONS.iter().any(|e| *e == lower)
 }
 
 /// Scan one archive/config file (`.json`, `.html`, `.txt`, `.sub`, `.yaml`, `.ovpn`, etc.)

@@ -163,8 +163,7 @@ pub fn order_endpoints_with_bandit(
         .map(|(i, ep)| crate::probe::bandit::CandidateArm {
             arm_id: format!("{:?}:{}:{}", ep.kind, ep.host, ep.port),
             protocol_family: format!("{:?}", ep.kind),
-            base_priority: (ep.weight as f64).clamp(0.0, 1.0)
-                + (1.0 / ((i + 2) as f64)) * 0.1,
+            base_priority: (ep.weight as f64).clamp(0.0, 1.0) + (1.0 / ((i + 2) as f64)) * 0.1,
         })
         .collect();
     let slate = store.select_diverse_slate(network_ctx, &arms, intent, endpoints.len(), now_unix);
@@ -278,7 +277,9 @@ impl TunnelOpener for RealTunnelOpener<'_> {
             crate::egress::carrier_pool::CarrierKind::WorkerData
             | crate::egress::carrier_pool::CarrierKind::WorkerTunnel => {
                 let Some(cfg) = self.probe_config(ep) else {
-                    return Err(OpenError::Other("endpoint missing worker_url/upstream".into()));
+                    return Err(OpenError::Other(
+                        "endpoint missing worker_url/upstream".into(),
+                    ));
                 };
                 crate::net::connectivity::probe_worker_tunnel_live(&cfg, self.timeout).ok
             }

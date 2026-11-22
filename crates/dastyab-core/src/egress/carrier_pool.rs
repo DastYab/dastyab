@@ -822,7 +822,10 @@ mod tests {
         };
         fs::write(&path, serde_json::to_vec(&snap).unwrap()).unwrap();
         // `open` verifies on read → must reject schema v2.
-        assert!(matches!(CarrierPool::open(&path), Err(CarrierPoolError::Schema(2))));
+        assert!(matches!(
+            CarrierPool::open(&path),
+            Err(CarrierPoolError::Schema(2))
+        ));
     }
 
     fn identity_of(pool: &CarrierPool) -> [u8; 32] {

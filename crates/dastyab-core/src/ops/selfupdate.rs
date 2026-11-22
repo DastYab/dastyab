@@ -53,7 +53,9 @@ impl BinaryKind {
     pub fn detect_current() -> Self {
         let exe = std::env::current_exe().ok();
         let fname = exe.as_deref().and_then(Path::file_name);
-        let name = fname.map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = fname
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         Self::detect_from_exe_name(&name)
     }
 
@@ -390,7 +392,10 @@ async fn fetch_release_via_api(client: &reqwest::Client) -> Result<ReleaseInfo, 
 
     let tag = body["tag_name"].as_str().unwrap_or("").to_string();
     if tag.is_empty() {
-        return Err(upd_err("No release tag found.", "No public release exists yet."));
+        return Err(upd_err(
+            "No release tag found.",
+            "No public release exists yet.",
+        ));
     }
 
     let mut assets = Vec::new();
@@ -711,7 +716,11 @@ enum SwapPlacement {
 fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
     let dir = mem_dir().join("bin");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(CFError::new("Storage error", format!("{e}"), "Check permissions."));
+        return Err(CFError::new(
+            "Storage error",
+            format!("{e}"),
+            "Check permissions.",
+        ));
     }
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));

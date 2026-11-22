@@ -166,8 +166,8 @@ impl ContextualBanditStore {
         } else {
             0.12
         };
-        let explore = UCB_EXPLORATION_C
-            * (total_trials.ln().max(1.0) / st.discounted_trials.max(1.0)).sqrt();
+        let explore =
+            UCB_EXPLORATION_C * (total_trials.ln().max(1.0) / st.discounted_trials.max(1.0)).sqrt();
 
         let intent_bonus = match intent {
             AutopilotIntent::BalancedWeb => {
@@ -266,8 +266,7 @@ impl ContextualBanditStore {
                 _ => 0,
             };
             let eff = entry.effective_circuit(now_unix);
-            if eff == CircuitState::HalfOpen
-                || entry.consecutive_failures >= CIRCUIT_TRIP_FAILURES
+            if eff == CircuitState::HalfOpen || entry.consecutive_failures >= CIRCUIT_TRIP_FAILURES
             {
                 let trips = prev_trips.saturating_add(1).max(1);
                 let shift = (trips - 1).min(6);
@@ -353,7 +352,10 @@ impl ContextualBanditStore {
 
     /// Remember a verified clean IP seed for `/24` neighborhood scouting on this network.
     pub fn record_clean_ip_seed(&mut self, network_ctx: &str, ip: &str) {
-        let list = self.clean_ip_seeds.entry(network_ctx.to_string()).or_default();
+        let list = self
+            .clean_ip_seeds
+            .entry(network_ctx.to_string())
+            .or_default();
         list.retain(|x| x != ip);
         list.insert(0, ip.to_string());
         if list.len() > 24 {
@@ -417,15 +419,7 @@ mod tests {
                 GEO_CLEAR_WEB,
                 t,
             );
-            store.record_outcome(
-                net_b,
-                "vless-2",
-                "xray",
-                true,
-                Some(95.0),
-                GEO_CLEAR_WEB,
-                t,
-            );
+            store.record_outcome(net_b, "vless-2", "xray", true, Some(95.0), GEO_CLEAR_WEB, t);
         }
 
         let s1_a = store.score_arm(

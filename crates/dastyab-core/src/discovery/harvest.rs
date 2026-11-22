@@ -1297,7 +1297,9 @@ mod tests {
         let links = extract_proxy_links(body);
         assert_eq!(links.len(), 2);
         assert!(links.iter().any(|l| l.starts_with("vless://")));
-        assert!(links.iter().any(|l| l.starts_with("http://user:pass@9.9.9.9:8080")));
+        assert!(links
+            .iter()
+            .any(|l| l.starts_with("http://user:pass@9.9.9.9:8080")));
     }
 
     #[test]

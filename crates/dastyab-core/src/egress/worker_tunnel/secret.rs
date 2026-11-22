@@ -1210,14 +1210,20 @@ mod tests {
             LearningSignal::Unclassifiable
         );
         // Neither feeds the learner.
-        assert!(!should_learn(classify_endpoint_outcome(Some(S::WorkerBytesAllPorts))));
-        assert!(!should_learn(classify_endpoint_outcome(Some(S::WsUpgradeAllPorts))));
+        assert!(!should_learn(classify_endpoint_outcome(Some(
+            S::WorkerBytesAllPorts
+        ))));
+        assert!(!should_learn(classify_endpoint_outcome(Some(
+            S::WsUpgradeAllPorts
+        ))));
         // The clear TLS-layer DPI signature still demotes.
         assert_eq!(
             classify_endpoint_outcome(Some(S::TlsResetAllPorts)),
             LearningSignal::StrategyFailure
         );
-        assert!(should_learn(classify_endpoint_outcome(Some(S::TlsResetAllPorts))));
+        assert!(should_learn(classify_endpoint_outcome(Some(
+            S::TlsResetAllPorts
+        ))));
     }
 
     #[test]

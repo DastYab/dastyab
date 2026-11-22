@@ -257,7 +257,10 @@ pub fn classify_exit_reputation(
         || (low.contains("cloudflare") && low.contains("warp"))
         || low.contains("tor")
     {
-        return (ExitReputation::WarpOrTor, ExitReputation::WarpOrTor.base_score());
+        return (
+            ExitReputation::WarpOrTor,
+            ExitReputation::WarpOrTor.base_score(),
+        );
     }
     let known_dc = HOSTING_ORG_KEYWORDS.iter().any(|k| low.contains(k));
     let known_res = RESIDENTIAL_ORG_KEYWORDS.iter().any(|k| low.contains(k));
@@ -366,7 +369,11 @@ fn set_default_param(params: &mut HashMap<String, String>, key: &str, value: &st
 pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(CFError::new("chain", "empty proxy link", "Paste a proxy URI."));
+        return Err(CFError::new(
+            "chain",
+            "empty proxy link",
+            "Paste a proxy URI.",
+        ));
     }
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -676,7 +683,11 @@ fn push_unique_uri(out: &mut Vec<String>, seen: &mut HashSet<String>, raw: Strin
 /// or arbitrary config bundle bytes (mixed with prose, emojis, web links,
 /// base64 blobs, Clash YAML, Sing-Box/Xray JSON, WireGuard INI, OpenVPN).
 pub fn extract_all_config_links_from_blob(filename: &str, bytes: &[u8]) -> Vec<String> {
-    let _ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let _ext = filename
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let text = decode_text_with_bom(bytes);
 
     let mut printable = String::with_capacity(bytes.len().min(65536));
@@ -1044,9 +1055,9 @@ fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
                     .encode(format!("{method}:{pw}").as_bytes());
                 Some(format!("ss://{creds}@{server}:{port}#{alias}"))
             }
-            ("hysteria2" | "hy2", _, Some(pw)) => {
-                Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"))
-            }
+            ("hysteria2" | "hy2", _, Some(pw)) => Some(format!(
+                "hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"
+            )),
             ("tuic", Some(u), Some(pw)) => {
                 Some(format!("tuic://{u}:{pw}@{server}:{port}?sni={sni}#{alias}"))
             }
@@ -1175,7 +1186,10 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
             ))
         }
         "ss" => {
-            let cipher = map.get("cipher").map(String::as_str).unwrap_or("aes-256-gcm");
+            let cipher = map
+                .get("cipher")
+                .map(String::as_str)
+                .unwrap_or("aes-256-gcm");
             let pw = map.get("password")?;
             let enc = base64::engine::general_purpose::STANDARD
                 .encode(format!("{cipher}:{pw}").as_bytes());
@@ -1183,9 +1197,7 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
         }
         "hysteria2" | "hy2" => {
             let pw = map.get("password")?;
-            Some(format!(
-                "hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"
-            ))
+            Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"))
         }
         "tuic" => {
             let uuid = map.get("uuid")?;
@@ -2531,7 +2543,10 @@ async fn handle_socks_client(
     let mut hdr = [0u8; 2];
     client.read_exact(&mut hdr).await?;
     if hdr[0] != 0x05 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not SOCKS5"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not SOCKS5",
+        ));
     }
     let nmethods = hdr[1] as usize;
     let mut methods = vec![0u8; nmethods];
@@ -2543,7 +2558,10 @@ async fn handle_socks_client(
     if req[1] != 0x01 {
         let err_rep = [0x05u8, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
         let _ = client.write_all(&err_rep).await;
-        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only CONNECT"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "only CONNECT",
+        ));
     }
     let target_host = match req[3] {
         0x01 => {
@@ -2566,7 +2584,10 @@ async fn handle_socks_client(
         _ => {
             let err_rep = [0x05u8, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
             let _ = client.write_all(&err_rep).await;
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad atyp"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad atyp",
+            ));
         }
     };
     let mut pbuf = [0u8; 2];

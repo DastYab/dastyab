@@ -2156,7 +2156,10 @@ pub async fn daemon_tick(
                         state.last_self_ping_ts = now;
                     }
                     None => {
-                        log(&log_line("INFO", "worker self-ping: none (no worker tunnel)"));
+                        log(&log_line(
+                            "INFO",
+                            "worker self-ping: none (no worker tunnel)",
+                        ));
                         state.last_self_ping_ts = now;
                     }
                 }
@@ -2751,8 +2754,13 @@ mod tests {
         let dir = crate::store::profiles::profile_dir(&profile);
         // Seed one real version so the sweep has content to verify.
         std::fs::write(dir.join("config.json"), b"old").unwrap();
-        crate::artifact::artifact_versions::snapshot_before_write(&dir, "config.json", b"new", 1000)
-            .unwrap();
+        crate::artifact::artifact_versions::snapshot_before_write(
+            &dir,
+            "config.json",
+            b"new",
+            1000,
+        )
+        .unwrap();
 
         let mut state = DaemonState::default();
         state.last_verify_ts = 0; // never verified → due

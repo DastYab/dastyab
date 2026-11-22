@@ -32,9 +32,9 @@ pub fn allows_cli_auto_update(cmd: &Command) -> bool {
         | Command::ProfileExport { .. }
         | Command::Export { .. } => false,
         Command::Find { json, quiet, .. } => !*json && !*quiet,
-        Command::Inventory { json, .. }
-        | Command::Doctor { json }
-        | Command::Health { json } => !*json,
+        Command::Inventory { json, .. } | Command::Doctor { json } | Command::Health { json } => {
+            !*json
+        }
         Command::Cleanip {
             action: CleanipAction::List { json, .. },
         } => !*json,
@@ -3428,7 +3428,10 @@ async fn cmd_protection(profile: &str, action: ProtectionAction) -> Result<(), C
                 let cause = dastyab_core::diagnose::diagnose(&diag, probe);
                 println!(
                     "  Last scan: {}",
-                    dastyab_core::diagnose::plain_message(cause, dastyab_core::diagnose::Locale::En)
+                    dastyab_core::diagnose::plain_message(
+                        cause,
+                        dastyab_core::diagnose::Locale::En
+                    )
                 );
                 println!(
                     "  Recommended: {}",
@@ -5967,7 +5970,9 @@ async fn cmd_dns_tunnel(profile: &str, action: crate::DnsTunnelAction) -> Result
             concurrency,
             timeout_ms,
         } => {
-            use dastyab_core::resolve_pool::{discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES};
+            use dastyab_core::resolve_pool::{
+                discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES,
+            };
             let cands: Vec<String> = match candidates {
                 Some(s) if !s.trim().is_empty() => s
                     .split(',')

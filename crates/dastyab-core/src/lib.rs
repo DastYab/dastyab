@@ -149,7 +149,9 @@ pub use tunnel::tunnel_lifeline;
 pub use artifact::vless::VlessProfile;
 pub use egress::worker_tunnel;
 pub use error::CFError;
-pub use net::connectivity::{FallbackLadder, Probe, ProbeVerdict, RealLadderProbe, Tier, TierChange};
+pub use net::connectivity::{
+    FallbackLadder, Probe, ProbeVerdict, RealLadderProbe, Tier, TierChange,
+};
 pub use net::doh::DohResolver;
 pub use net::dot::DotEndpoint;
 pub use store::profiles::Profile;

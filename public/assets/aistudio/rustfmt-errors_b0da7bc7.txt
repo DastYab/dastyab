@@ -1,0 +1,644 @@
+Diff in crates/dastyab-cli/src/commands.rs:32:
+         | Command::ProfileExport { .. }
+         | Command::Export { .. } => false,
+         Command::Find { json, quiet, .. } => !*json && !*quiet,
+-        Command::Inventory { json, .. }
+-        | Command::Doctor { json }
+-        | Command::Health { json } => !*json,
++        Command::Inventory { json, .. } | Command::Doctor { json } | Command::Health { json } => {
++            !*json
++        }
+         Command::Cleanip {
+             action: CleanipAction::List { json, .. },
+         } => !*json,
+Diff in crates/dastyab-cli/src/commands.rs:3428:
+                 let cause = dastyab_core::diagnose::diagnose(&diag, probe);
+                 println!(
+                     "  Last scan: {}",
+-                    dastyab_core::diagnose::plain_message(cause, dastyab_core::diagnose::Locale::En)
++                    dastyab_core::diagnose::plain_message(
++                        cause,
++                        dastyab_core::diagnose::Locale::En
++                    )
+                 );
+                 println!(
+                     "  Recommended: {}",
+Diff in crates/dastyab-cli/src/commands.rs:5967:
+             concurrency,
+             timeout_ms,
+         } => {
+-            use dastyab_core::resolve_pool::{discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES};
++            use dastyab_core::resolve_pool::{
++                discover_open_resolvers, IRANIAN_RESOLVER_CANDIDATES,
++            };
+             let cands: Vec<String> = match candidates {
+                 Some(s) if !s.trim().is_empty() => s
+                     .split(',')
+Diff in crates/dastyab-core/src/daemon/autonomy_schedule.rs:242:
+     #[test]
+     fn no_regression_on_dirty_to_dirty() {
+         // dirty→dirty with same set: no change.
+-        assert!(!regression_events(Some(action_digest(&["a"])), action_digest(&["a"])));
++        assert!(!regression_events(
++            Some(action_digest(&["a"])),
++            action_digest(&["a"])
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/daemon/autonomy_schedule.rs:264:
+                 host_down_since_unix: 0,
+             },
+         );
+-        assert!(auto_executable("worker_secret_rotate", &cfg, true, 3_000_000));
++        assert!(auto_executable(
++            "worker_secret_rotate",
++            &cfg,
++            true,
++            3_000_000
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/daemon/autonomy_schedule.rs:285:
+                 host_down_since_unix: 0,
+             },
+         );
+-        assert!(!auto_executable("worker_secret_rotate", &cfg, false, 999_999));
++        assert!(!auto_executable(
++            "worker_secret_rotate",
++            &cfg,
++            false,
++            999_999
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/daemon/mod.rs:2156:
+                         state.last_self_ping_ts = now;
+                     }
+                     None => {
+-                        log(&log_line("INFO", "worker self-ping: none (no worker tunnel)"));
++                        log(&log_line(
++                            "INFO",
++                            "worker self-ping: none (no worker tunnel)",
++                        ));
+                         state.last_self_ping_ts = now;
+                     }
+                 }
+Diff in crates/dastyab-core/src/daemon/mod.rs:2751:
+         let dir = crate::store::profiles::profile_dir(&profile);
+         // Seed one real version so the sweep has content to verify.
+         std::fs::write(dir.join("config.json"), b"old").unwrap();
+-        crate::artifact::artifact_versions::snapshot_before_write(&dir, "config.json", b"new", 1000)
+-            .unwrap();
++        crate::artifact::artifact_versions::snapshot_before_write(
++            &dir,
++            "config.json",
++            b"new",
++            1000,
++        )
++        .unwrap();
+ 
+         let mut state = DaemonState::default();
+         state.last_verify_ts = 0; // never verified → due
+Diff in crates/dastyab-core/src/daemon/reselect.rs:163:
+         .map(|(i, ep)| crate::probe::bandit::CandidateArm {
+             arm_id: format!("{:?}:{}:{}", ep.kind, ep.host, ep.port),
+             protocol_family: format!("{:?}", ep.kind),
+-            base_priority: (ep.weight as f64).clamp(0.0, 1.0)
+-                + (1.0 / ((i + 2) as f64)) * 0.1,
++            base_priority: (ep.weight as f64).clamp(0.0, 1.0) + (1.0 / ((i + 2) as f64)) * 0.1,
+         })
+         .collect();
+     let slate = store.select_diverse_slate(network_ctx, &arms, intent, endpoints.len(), now_unix);
+Diff in crates/dastyab-core/src/daemon/reselect.rs:278:
+             crate::egress::carrier_pool::CarrierKind::WorkerData
+             | crate::egress::carrier_pool::CarrierKind::WorkerTunnel => {
+                 let Some(cfg) = self.probe_config(ep) else {
+-                    return Err(OpenError::Other("endpoint missing worker_url/upstream".into()));
++                    return Err(OpenError::Other(
++                        "endpoint missing worker_url/upstream".into(),
++                    ));
+                 };
+                 crate::net::connectivity::probe_worker_tunnel_live(&cfg, self.timeout).ok
+             }
+Diff in crates/dastyab-core/src/discovery/harvest.rs:1297:
+         let links = extract_proxy_links(body);
+         assert_eq!(links.len(), 2);
+         assert!(links.iter().any(|l| l.starts_with("vless://")));
+-        assert!(links.iter().any(|l| l.starts_with("http://user:pass@9.9.9.9:8080")));
++        assert!(links
++            .iter()
++            .any(|l| l.starts_with("http://user:pass@9.9.9.9:8080")));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/discovery/tg_export.rs:149:
+         return false;
+     };
+     let lower = ext.to_ascii_lowercase();
+-    lower == "html"
+-        || lower == "htm"
+-        || VPN_CONFIG_FILE_EXTENSIONS.iter().any(|e| *e == lower)
++    lower == "html" || lower == "htm" || VPN_CONFIG_FILE_EXTENSIONS.iter().any(|e| *e == lower)
+ }
+ 
+ /// Scan one archive/config file (`.json`, `.html`, `.txt`, `.sub`, `.yaml`, `.ovpn`, etc.)
+Diff in crates/dastyab-core/src/egress/carrier_pool.rs:822:
+         };
+         fs::write(&path, serde_json::to_vec(&snap).unwrap()).unwrap();
+         // `open` verifies on read → must reject schema v2.
+-        assert!(matches!(CarrierPool::open(&path), Err(CarrierPoolError::Schema(2))));
++        assert!(matches!(
++            CarrierPool::open(&path),
++            Err(CarrierPoolError::Schema(2))
++        ));
+     }
+ 
+     fn identity_of(pool: &CarrierPool) -> [u8; 32] {
+Diff in crates/dastyab-core/src/egress/worker_tunnel/secret.rs:1210:
+             LearningSignal::Unclassifiable
+         );
+         // Neither feeds the learner.
+-        assert!(!should_learn(classify_endpoint_outcome(Some(S::WorkerBytesAllPorts))));
+-        assert!(!should_learn(classify_endpoint_outcome(Some(S::WsUpgradeAllPorts))));
++        assert!(!should_learn(classify_endpoint_outcome(Some(
++            S::WorkerBytesAllPorts
++        ))));
++        assert!(!should_learn(classify_endpoint_outcome(Some(
++            S::WsUpgradeAllPorts
++        ))));
+         // The clear TLS-layer DPI signature still demotes.
+         assert_eq!(
+             classify_endpoint_outcome(Some(S::TlsResetAllPorts)),
+Diff in crates/dastyab-core/src/egress/worker_tunnel/secret.rs:1218:
+             LearningSignal::StrategyFailure
+         );
+-        assert!(should_learn(classify_endpoint_outcome(Some(S::TlsResetAllPorts))));
++        assert!(should_learn(classify_endpoint_outcome(Some(
++            S::TlsResetAllPorts
++        ))));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/lib.rs:149:
+ pub use artifact::vless::VlessProfile;
+ pub use egress::worker_tunnel;
+ pub use error::CFError;
+-pub use net::connectivity::{FallbackLadder, Probe, ProbeVerdict, RealLadderProbe, Tier, TierChange};
++pub use net::connectivity::{
++    FallbackLadder, Probe, ProbeVerdict, RealLadderProbe, Tier, TierChange,
++};
+ pub use net::doh::DohResolver;
+ pub use net::dot::DotEndpoint;
+ pub use store::profiles::Profile;
+Diff in crates/dastyab-core/src/mesh/dtn_gossip.rs:180:
+     /// Verify signature and return the sender key if valid.
+     pub fn verify(&self) -> Result<VerifyingKey, CFError> {
+         if self.sender_pk.len() != 32 {
+-            return Err(CFError::new("gossip", "bad sender public key length", "reject"));
++            return Err(CFError::new(
++                "gossip",
++                "bad sender public key length",
++                "reject",
++            ));
+         }
+         let vk = VerifyingKey::from_bytes(&self.sender_pk[..].try_into().unwrap())
+             .map_err(|e| CFError::new("gossip", format!("bad sender public key: {e}"), "reject"))?;
+Diff in crates/dastyab-core/src/mesh/mesh_relay.rs:336:
+         let (len, _src) = match sock.recv_from(&mut buf) {
+             Ok(ok) => ok,
+             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+-                return Ok(ForwardOutcome::Error("relay timed out (no reply)".to_string()));
++                return Ok(ForwardOutcome::Error(
++                    "relay timed out (no reply)".to_string(),
++                ));
+             }
+             Err(e) => return Err(e),
+         };
+Diff in crates/dastyab-core/src/mesh/mesh_relay.rs:356:
+             }
+         }
+     }
+-    Ok(ForwardOutcome::Error("relay timed out (no matching reply)".to_string()))
++    Ok(ForwardOutcome::Error(
++        "relay timed out (no matching reply)".to_string(),
++    ))
+ }
+ 
+ #[cfg(test)]
+Diff in crates/dastyab-core/src/mesh/remote_beacon.rs:508:
+         }
+         BeaconKind::GenericWebhook => {
+             if config.chat_id_or_url.is_empty() {
+-                return Err(CFError::new("Beacon", "Webhook URL empty.", "Set a webhook URL."));
++                return Err(CFError::new(
++                    "Beacon",
++                    "Webhook URL empty.",
++                    "Set a webhook URL.",
++                ));
+             }
+             let resp = client
+                 .post(&config.chat_id_or_url)
+Diff in crates/dastyab-core/src/mesh/remote_beacon.rs:684:
+ 
+     #[test]
+     fn test_should_send_true_for_new_event() {
+-        assert!(should_send(BeaconEventKind::ProtectionStarted, &map(), 1000, 900));
++        assert!(should_send(
++            BeaconEventKind::ProtectionStarted,
++            &map(),
++            1000,
++            900
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/mesh/remote_beacon.rs:691:
+     fn test_should_send_false_within_rate_limit() {
+         let mut m = map();
+         m.insert(BeaconEventKind::ProtectionStarted, 500);
+-        assert!(!should_send(BeaconEventKind::ProtectionStarted, &m, 1000, 900));
++        assert!(!should_send(
++            BeaconEventKind::ProtectionStarted,
++            &m,
++            1000,
++            900
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/mesh/remote_beacon.rs:699:
+         let mut m = map();
+         m.insert(BeaconEventKind::ProtectionStarted, 500);
+         // 1000 - 500 = 500 < 900 → still limited.
+-        assert!(!should_send(BeaconEventKind::ProtectionStarted, &m, 1000, 900));
++        assert!(!should_send(
++            BeaconEventKind::ProtectionStarted,
++            &m,
++            1000,
++            900
++        ));
+         // 1400 - 500 = 900 → exactly at limit → allowed.
+-        assert!(should_send(BeaconEventKind::ProtectionStarted, &m, 1400, 900));
++        assert!(should_send(
++            BeaconEventKind::ProtectionStarted,
++            &m,
++            1400,
++            900
++        ));
+     }
+ 
+     #[test]
+Diff in crates/dastyab-core/src/net/doh.rs:424:
+     let mut hops = 0u32;
+     loop {
+         if pos >= bytes.len() {
+-            return Err(CFError::new("DoH parse", "Name ran past end of message.", ""));
++            return Err(CFError::new(
++                "DoH parse",
++                "Name ran past end of message.",
++                "",
++            ));
+         }
+         let len = bytes[pos];
+         if len & 0xC0 == 0xC0 {
+Diff in crates/dastyab-core/src/net/doh.rs:433:
+             }
+             hops += 1;
+             if hops > 32 {
+-                return Err(CFError::new("DoH parse", "Compression pointer loop detected.", ""));
++                return Err(CFError::new(
++                    "DoH parse",
++                    "Compression pointer loop detected.",
++                    "",
++                ));
+             }
+             if !jumped {
+                 start = pos + 2;
+Diff in crates/dastyab-core/src/net/doh.rs:529:
+     let mut hops = 0u32;
+     loop {
+         if pos >= bytes.len() {
+-            return Err(CFError::new("DoH parse", "Name ran past end of message.", ""));
++            return Err(CFError::new(
++                "DoH parse",
++                "Name ran past end of message.",
++                "",
++            ));
+         }
+         let len = bytes[pos];
+         if len & 0xC0 == 0xC0 {
+Diff in crates/dastyab-core/src/net/doh.rs:538:
+             }
+             hops += 1;
+             if hops > 32 {
+-                return Err(CFError::new("DoH parse", "Compression pointer loop detected.", ""));
++                return Err(CFError::new(
++                    "DoH parse",
++                    "Compression pointer loop detected.",
++                    "",
++                ));
+             }
+             let next = ((len & 0x3F) as usize) << 8 | bytes[pos + 1] as usize;
+             if pointer_target.is_none() {
+Diff in crates/dastyab-core/src/net/resolve_pool.rs:274:
+         use std::net::UdpSocket;
+         let sock = UdpSocket::bind("127.0.0.1:0").expect("bind responder");
+         let addr = sock.local_addr().expect("local addr");
+-        let server = Arc::new(DnsTunnelServer::new(base.to_string(), TunnelHandler::default()));
++        let server = Arc::new(DnsTunnelServer::new(
++            base.to_string(),
++            TunnelHandler::default(),
++        ));
+         std::thread::spawn(move || {
+             let mut buf = [0u8; 512];
+             while let Ok((n, src)) = sock.recv_from(&mut buf) {
+Diff in crates/dastyab-core/src/ops/selfupdate.rs:53:
+     pub fn detect_current() -> Self {
+         let exe = std::env::current_exe().ok();
+         let fname = exe.as_deref().and_then(Path::file_name);
+-        let name = fname.map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
++        let name = fname
++            .map(|n| n.to_string_lossy().into_owned())
++            .unwrap_or_default();
+         Self::detect_from_exe_name(&name)
+     }
+ 
+Diff in crates/dastyab-core/src/ops/selfupdate.rs:390:
+ 
+     let tag = body["tag_name"].as_str().unwrap_or("").to_string();
+     if tag.is_empty() {
+-        return Err(upd_err("No release tag found.", "No public release exists yet."));
++        return Err(upd_err(
++            "No release tag found.",
++            "No public release exists yet.",
++        ));
+     }
+ 
+     let mut assets = Vec::new();
+Diff in crates/dastyab-core/src/ops/selfupdate.rs:711:
+ fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
+     let dir = mem_dir().join("bin");
+     if let Err(e) = std::fs::create_dir_all(&dir) {
+-        return Err(CFError::new("Storage error", format!("{e}"), "Check permissions."));
++        return Err(CFError::new(
++            "Storage error",
++            format!("{e}"),
++            "Check permissions.",
++        ));
+     }
+     let ext = if cfg!(windows) { ".exe" } else { "" };
+     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));
+Diff in crates/dastyab-core/src/probe/bandit.rs:166:
+         } else {
+             0.12
+         };
+-        let explore = UCB_EXPLORATION_C
+-            * (total_trials.ln().max(1.0) / st.discounted_trials.max(1.0)).sqrt();
++        let explore =
++            UCB_EXPLORATION_C * (total_trials.ln().max(1.0) / st.discounted_trials.max(1.0)).sqrt();
+ 
+         let intent_bonus = match intent {
+             AutopilotIntent::BalancedWeb => {
+Diff in crates/dastyab-core/src/probe/bandit.rs:266:
+                 _ => 0,
+             };
+             let eff = entry.effective_circuit(now_unix);
+-            if eff == CircuitState::HalfOpen
+-                || entry.consecutive_failures >= CIRCUIT_TRIP_FAILURES
++            if eff == CircuitState::HalfOpen || entry.consecutive_failures >= CIRCUIT_TRIP_FAILURES
+             {
+                 let trips = prev_trips.saturating_add(1).max(1);
+                 let shift = (trips - 1).min(6);
+Diff in crates/dastyab-core/src/probe/bandit.rs:353:
+ 
+     /// Remember a verified clean IP seed for `/24` neighborhood scouting on this network.
+     pub fn record_clean_ip_seed(&mut self, network_ctx: &str, ip: &str) {
+-        let list = self.clean_ip_seeds.entry(network_ctx.to_string()).or_default();
++        let list = self
++            .clean_ip_seeds
++            .entry(network_ctx.to_string())
++            .or_default();
+         list.retain(|x| x != ip);
+         list.insert(0, ip.to_string());
+         if list.len() > 24 {
+Diff in crates/dastyab-core/src/probe/bandit.rs:417:
+                 GEO_CLEAR_WEB,
+                 t,
+             );
+-            store.record_outcome(
+-                net_b,
+-                "vless-2",
+-                "xray",
+-                true,
+-                Some(95.0),
+-                GEO_CLEAR_WEB,
+-                t,
+-            );
++            store.record_outcome(net_b, "vless-2", "xray", true, Some(95.0), GEO_CLEAR_WEB, t);
+         }
+ 
+         let s1_a = store.score_arm(
+Diff in crates/dastyab-core/src/probe/doctor.rs:502:
+     results.push(check_token_permissions(&opts.profile_id));
+ 
+     let state = crate::daemon::load_daemon_state(&opts.profile_id);
+-    results.push(check_autosync_freshness(&opts.profile_id, state.last_backup_ts, opts.now_unix));
++    results.push(check_autosync_freshness(
++        &opts.profile_id,
++        state.last_backup_ts,
++        opts.now_unix,
++    ));
+ 
+     results.push(check_latest_backup_verifies(&backups));
+     results.push(check_disk_headroom(&mem));
+Diff in crates/dastyab-core/src/probe/doctor.rs:521:
+     // Ledger append-only integrity (high-water vs current count). Guards
+     // against silent truncation of history/token_history/generated-configs.
+     let profile_dir = crate::store::profiles::profile_dir(&opts.profile_id);
+-    results.extend(crate::mesh::ledger_guard::doctor_check_ledger_integrity(&profile_dir));
++    results.extend(crate::mesh::ledger_guard::doctor_check_ledger_integrity(
++        &profile_dir,
++    ));
+ 
+     // Per-artifact versioning health (hot-path prune outcomes + dir sizes).
+     // Surfaces silent prune failures before version dirs exhaust disk.
+Diff in crates/dastyab-core/src/probe/node_probe.rs:621:
+     #[test]
+     fn link_uses_tls_detects_security_param() {
+         assert!(link_uses_tls("vless://u@1.2.3.4:443?security=tls&type=ws"));
+-        assert!(link_uses_tls("vless://u@1.2.3.4:443?security=reality&type=tcp"));
+-        assert!(!link_uses_tls("vless://u@1.2.3.4:443?encryption=none&type=ws"));
++        assert!(link_uses_tls(
++            "vless://u@1.2.3.4:443?security=reality&type=tcp"
++        ));
++        assert!(!link_uses_tls(
++            "vless://u@1.2.3.4:443?encryption=none&type=ws"
++        ));
+         assert!(link_uses_tls("trojan://pw@1.2.3.4:443"));
+         assert!(link_uses_tls("hysteria2://tok@1.2.3.4:8443"));
+         assert!(link_uses_tls("tuic://uuid:tok@1.2.3.4:7780"));
+Diff in crates/dastyab-core/src/tunnel/chain_mixer.rs:531:
+     look_up: impl Fn(&ChainElement) -> Option<String>,
+ ) -> Result<PlannedChain, CFError> {
+     if config.engines.is_empty() {
+-        return Err(CFError::new("chain_mixer", "empty chain", "add at least one engine"));
++        return Err(CFError::new(
++            "chain_mixer",
++            "empty chain",
++            "add at least one engine",
++        ));
+     }
+     // De-duplicate consecutive repeats and reject > 8 layers (sanity bound).
+     let mut seen = std::collections::HashSet::new();
+Diff in crates/dastyab-core/src/tunnel/chain_mixer.rs:554:
+         });
+     }
+     if layers.len() > 8 {
+-        return Err(CFError::new("chain_mixer", "chain too long", "max 8 layers supported"));
++        return Err(CFError::new(
++            "chain_mixer",
++            "chain too long",
++            "max 8 layers supported",
++        ));
+     }
+     // Wire upstreams: layer i forwards into layer i+1.
+     let n = layers.len();
+Diff in crates/dastyab-core/src/tunnel/dnstt_server.rs:153:
+ /// correct.
+ pub fn parse_question(pkt: &[u8]) -> Result<(u16, String, u16, u16), CFError> {
+     if pkt.len() < 12 {
+-        return Err(CFError::new("dnstt-server", "datagram shorter than DNS header", ""));
++        return Err(CFError::new(
++            "dnstt-server",
++            "datagram shorter than DNS header",
++            "",
++        ));
+     }
+     let id = u16::from_be_bytes([pkt[0], pkt[1]]);
+     let qdcount = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+Diff in crates/dastyab-core/src/tunnel/dnstt_server.rs:174:
+         }
+         // No compression pointers are legal inside a question name.
+         if len & 0xC0 != 0 {
+-            return Err(CFError::new("dnstt-server", "unexpected pointer in question", ""));
++            return Err(CFError::new(
++                "dnstt-server",
++                "unexpected pointer in question",
++                "",
++            ));
+         }
+         let l = len as usize;
+         if pos + 1 + l > pkt.len() {
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:257:
+         || (low.contains("cloudflare") && low.contains("warp"))
+         || low.contains("tor")
+     {
+-        return (ExitReputation::WarpOrTor, ExitReputation::WarpOrTor.base_score());
++        return (
++            ExitReputation::WarpOrTor,
++            ExitReputation::WarpOrTor.base_score(),
++        );
+     }
+     let known_dc = HOSTING_ORG_KEYWORDS.iter().any(|k| low.contains(k));
+     let known_res = RESIDENTIAL_ORG_KEYWORDS.iter().any(|k| low.contains(k));
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:366:
+ pub fn parse_chain_hop(raw: &str) -> Result<ChainHop, CFError> {
+     let trimmed = raw.trim();
+     if trimmed.is_empty() {
+-        return Err(CFError::new("chain", "empty proxy link", "Paste a proxy URI."));
++        return Err(CFError::new(
++            "chain",
++            "empty proxy link",
++            "Paste a proxy URI.",
++        ));
+     }
+     let lower = trimmed.to_ascii_lowercase();
+     if lower.starts_with("http://") || lower.starts_with("https://") {
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:676:
+ /// or arbitrary config bundle bytes (mixed with prose, emojis, web links,
+ /// base64 blobs, Clash YAML, Sing-Box/Xray JSON, WireGuard INI, OpenVPN).
+ pub fn extract_all_config_links_from_blob(filename: &str, bytes: &[u8]) -> Vec<String> {
+-    let _ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
++    let _ext = filename
++        .rsplit('.')
++        .next()
++        .unwrap_or("")
++        .to_ascii_lowercase();
+     let text = decode_text_with_bom(bytes);
+ 
+     let mut printable = String::with_capacity(bytes.len().min(65536));
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:1044:
+                     .encode(format!("{method}:{pw}").as_bytes());
+                 Some(format!("ss://{creds}@{server}:{port}#{alias}"))
+             }
+-            ("hysteria2" | "hy2", _, Some(pw)) => {
+-                Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"))
+-            }
++            ("hysteria2" | "hy2", _, Some(pw)) => Some(format!(
++                "hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"
++            )),
+             ("tuic", Some(u), Some(pw)) => {
+                 Some(format!("tuic://{u}:{pw}@{server}:{port}?sni={sni}#{alias}"))
+             }
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:1175:
+             ))
+         }
+         "ss" => {
+-            let cipher = map.get("cipher").map(String::as_str).unwrap_or("aes-256-gcm");
++            let cipher = map
++                .get("cipher")
++                .map(String::as_str)
++                .unwrap_or("aes-256-gcm");
+             let pw = map.get("password")?;
+             let enc = base64::engine::general_purpose::STANDARD
+                 .encode(format!("{cipher}:{pw}").as_bytes());
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:1183:
+         }
+         "hysteria2" | "hy2" => {
+             let pw = map.get("password")?;
+-            Some(format!(
+-                "hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"
+-            ))
++            Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"))
+         }
+         "tuic" => {
+             let uuid = map.get("uuid")?;
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:2531:
+     let mut hdr = [0u8; 2];
+     client.read_exact(&mut hdr).await?;
+     if hdr[0] != 0x05 {
+-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not SOCKS5"));
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidData,
++            "not SOCKS5",
++        ));
+     }
+     let nmethods = hdr[1] as usize;
+     let mut methods = vec![0u8; nmethods];
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:2543:
+     if req[1] != 0x01 {
+         let err_rep = [0x05u8, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+         let _ = client.write_all(&err_rep).await;
+-        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only CONNECT"));
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::Unsupported,
++            "only CONNECT",
++        ));
+     }
+     let target_host = match req[3] {
+         0x01 => {
+Diff in crates/dastyab-core/src/tunnel/lion_warrior.rs:2566:
+         _ => {
+             let err_rep = [0x05u8, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+             let _ = client.write_all(&err_rep).await;
+-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad atyp"));
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidData,
++                "bad atyp",
++            ));
+         }
+     };
+     let mut pbuf = [0u8; 2];

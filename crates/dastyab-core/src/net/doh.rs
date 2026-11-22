@@ -424,7 +424,11 @@ fn skip_name(bytes: &[u8], mut pos: usize) -> Result<usize, CFError> {
     let mut hops = 0u32;
     loop {
         if pos >= bytes.len() {
-            return Err(CFError::new("DoH parse", "Name ran past end of message.", ""));
+            return Err(CFError::new(
+                "DoH parse",
+                "Name ran past end of message.",
+                "",
+            ));
         }
         let len = bytes[pos];
         if len & 0xC0 == 0xC0 {
@@ -433,7 +437,11 @@ fn skip_name(bytes: &[u8], mut pos: usize) -> Result<usize, CFError> {
             }
             hops += 1;
             if hops > 32 {
-                return Err(CFError::new("DoH parse", "Compression pointer loop detected.", ""));
+                return Err(CFError::new(
+                    "DoH parse",
+                    "Compression pointer loop detected.",
+                    "",
+                ));
             }
             if !jumped {
                 start = pos + 2;
@@ -529,7 +537,11 @@ fn read_name_string(bytes: &[u8], mut pos: usize) -> Result<(String, usize), CFE
     let mut hops = 0u32;
     loop {
         if pos >= bytes.len() {
-            return Err(CFError::new("DoH parse", "Name ran past end of message.", ""));
+            return Err(CFError::new(
+                "DoH parse",
+                "Name ran past end of message.",
+                "",
+            ));
         }
         let len = bytes[pos];
         if len & 0xC0 == 0xC0 {
@@ -538,7 +550,11 @@ fn read_name_string(bytes: &[u8], mut pos: usize) -> Result<(String, usize), CFE
             }
             hops += 1;
             if hops > 32 {
-                return Err(CFError::new("DoH parse", "Compression pointer loop detected.", ""));
+                return Err(CFError::new(
+                    "DoH parse",
+                    "Compression pointer loop detected.",
+                    "",
+                ));
             }
             let next = ((len & 0x3F) as usize) << 8 | bytes[pos + 1] as usize;
             if pointer_target.is_none() {

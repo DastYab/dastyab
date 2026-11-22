@@ -274,7 +274,10 @@ mod tests {
         use std::net::UdpSocket;
         let sock = UdpSocket::bind("127.0.0.1:0").expect("bind responder");
         let addr = sock.local_addr().expect("local addr");
-        let server = Arc::new(DnsTunnelServer::new(base.to_string(), TunnelHandler::default()));
+        let server = Arc::new(DnsTunnelServer::new(
+            base.to_string(),
+            TunnelHandler::default(),
+        ));
         std::thread::spawn(move || {
             let mut buf = [0u8; 512];
             while let Ok((n, src)) = sock.recv_from(&mut buf) {
