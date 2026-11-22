@@ -1700,7 +1700,8 @@ async fn fetch_geo_asn(client: &reqwest::Client, ip: &str) -> Option<GeoAsnRepor
     if let Ok(r) = client.get(IP_API_URL).send().await {
         if let Ok(v) = r.json::<serde_json::Value>().await {
             if v.get("status").and_then(|x| x.as_str()) == Some("success") {
-                let cc = v["countryCode"].as_str().unwrap_or("").to_ascii_uppercase();
+                let raw_cc = v["countryCode"].as_str().unwrap_or("");
+                let cc = raw_cc.to_ascii_uppercase();
                 let org = format!(
                     "{} {}",
                     v["isp"].as_str().unwrap_or(""),
@@ -1713,11 +1714,13 @@ async fn fetch_geo_asn(client: &reqwest::Client, ip: &str) -> Option<GeoAsnRepor
                 let is_warp = trace.is_warp();
                 let (reputation, clean_score) =
                     classify_exit_reputation(&org, proxy, hosting, false, is_warp);
+                let cname = v["country"].as_str().unwrap_or("").to_string();
+                let asn = v["as"].as_str().unwrap_or("").to_string();
                 return Some(GeoAsnReport {
                     ip: ip.to_string(),
                     country: cc,
-                    country_name: v["country"].as_str().unwrap_or("").to_string(),
-                    asn: v["as"].as_str().unwrap_or("").to_string(),
+                    country_name: cname,
+                    asn,
                     org,
                     is_proxy: proxy,
                     is_hosting: hosting,
@@ -1734,7 +1737,8 @@ async fn fetch_geo_asn(client: &reqwest::Client, ip: &str) -> Option<GeoAsnRepor
     if let Ok(r) = client.get("https://ipwho.is/").send().await {
         if let Ok(v) = r.json::<serde_json::Value>().await {
             if v["success"].as_bool() == Some(true) {
-                let cc = v["country_code"].as_str().unwrap_or("").to_ascii_uppercase();
+                let raw_cc = v["country_code"].as_str().unwrap_or("");
+                let cc = raw_cc.to_ascii_uppercase();
                 let org = v["connection"]["isp"]
                     .as_str()
                     .or_else(|| v["connection"]["org"].as_str())
@@ -1743,10 +1747,11 @@ async fn fetch_geo_asn(client: &reqwest::Client, ip: &str) -> Option<GeoAsnRepor
                 let is_warp = trace.is_warp();
                 let (reputation, clean_score) =
                     classify_exit_reputation(&org, false, false, false, is_warp);
+                let cname = v["country"].as_str().unwrap_or("").to_string();
                 return Some(GeoAsnReport {
                     ip: ip.to_string(),
                     country: cc,
-                    country_name: v["country"].as_str().unwrap_or("").to_string(),
+                    country_name: cname,
                     asn: v["connection"]["asn"]
                         .as_u64()
                         .map(|a| format!("AS{a}"))
@@ -1933,9 +1938,11 @@ async fn handle_socks_client(
     let target_port = u16::from_be_bytes(pbuf);
 
     let mut stream = if let Some(first) = hops.first() {
-        TcpStream::connect((first.host.as_str(), first.port)).await?
+        let addr = (first.host.as_str(), first.port);
+        TcpStream::connect(addr).await?
     } else {
-        TcpStream::connect((target_host.as_str(), target_port)).await?
+        let addr = (target_host.as_str(), target_port);
+        TcpStream::connect(addr).await?
     };
 
     for (idx, hop) in hops.iter().enumerate() {
@@ -2215,9 +2222,18 @@ mod tests {
         let http_port = http_listener.local_addr().unwrap().port();
         let http_task = tokio::spawn(async move {
             if let Ok((mut s, _)) = http_listener.accept().await {
-                let mut buf = vec![0u8; 1024];
-                let n = s.read(&mut buf).await.unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
+                let mut buf = Vec::with_capacity(1024);
+                let mut byte = [0u8; 1];
+                while buf.len() < 4096 {
+                    if s.read_exact(&mut byte).await.is_err() {
+                        break;
+                    }
+                    buf.push(byte[0]);
+                    if buf.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf);
                 let first_line = req.lines().next().unwrap_or("");
                 let hp = first_line.split_whitespace().nth(1).unwrap_or("");
                 if let Ok(mut dst) = TcpStream::connect(hp).await {
@@ -2230,29 +2246,37 @@ mod tests {
 
         // Upstream hop 1: SOCKS5 proxy -> HTTP proxy.
         let inner = start_cascade_socks_proxy(0, Vec::new()).await.unwrap();
-        let h1 = parse_chain_hop(&format!("socks5://127.0.0.1:{}", inner.port())).unwrap();
-        let h2 = parse_chain_hop(&format!("http://127.0.0.1:{http_port}")).unwrap();
+        let h1_url = format!("socks5://127.0.0.1:{}", inner.port());
+        let h2_url = format!("http://127.0.0.1:{http_port}");
+        let h1 = parse_chain_hop(&h1_url).unwrap();
+        let h2 = parse_chain_hop(&h2_url).unwrap();
         let outer = start_cascade_socks_proxy(0, vec![h1, h2]).await.unwrap();
+        let outer_addr = outer.local_addr;
 
         // Connect through outer 2-hop cascade to dummy target.
-        let mut client = TcpStream::connect(("127.0.0.1", outer.port())).await.unwrap();
-        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
-        let mut g = [0u8; 2];
-        client.read_exact(&mut g).await.unwrap();
-        assert_eq!(g, [0x05, 0x00]);
-        let host = b"127.0.0.1";
-        let mut req = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
-        req.extend_from_slice(host);
-        req.extend_from_slice(&target_port.to_be_bytes());
-        client.write_all(&req).await.unwrap();
-        let mut rep = [0u8; 10];
-        client.read_exact(&mut rep).await.unwrap();
-        assert_eq!(rep[1], 0x00);
+        let run_cascade = async {
+            let mut client = TcpStream::connect(outer_addr).await.unwrap();
+            client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+            let mut g = [0u8; 2];
+            client.read_exact(&mut g).await.unwrap();
+            assert_eq!(g, [0x05, 0x00]);
+            let host = b"127.0.0.1";
+            let mut req = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
+            req.extend_from_slice(host);
+            req.extend_from_slice(&target_port.to_be_bytes());
+            client.write_all(&req).await.unwrap();
+            let mut rep = [0u8; 10];
+            client.read_exact(&mut rep).await.unwrap();
+            assert_eq!(rep[1], 0x00);
 
-        client.write_all(b"WARRIOR-OK").await.unwrap();
-        let mut echo = [0u8; 10];
-        client.read_exact(&mut echo).await.unwrap();
-        assert_eq!(&echo, b"WARRIOR-OK");
+            client.write_all(b"WARRIOR-OK").await.unwrap();
+            let mut echo = [0u8; 10];
+            client.read_exact(&mut echo).await.unwrap();
+            assert_eq!(&echo, b"WARRIOR-OK");
+        };
+        tokio::time::timeout(Duration::from_secs(10), run_cascade)
+            .await
+            .expect("cascade socks5/http test timed out");
 
         drop(outer);
         drop(inner);
