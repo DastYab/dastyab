@@ -1004,8 +1004,8 @@ mod tests {
             .encode(r#"{"add":"1.2.3.4","port":0,"id":"abc"}"#);
         assert!(ProxyUri::parse(&format!("vmess://{zero_port}")).is_none());
 
-        let missing_id = base64::engine::general_purpose::STANDARD
-            .encode(r#"{"add":"1.2.3.4","port":443}"#);
+        let missing_id =
+            base64::engine::general_purpose::STANDARD.encode(r#"{"add":"1.2.3.4","port":443}"#);
         assert!(ProxyUri::parse(&format!("vmess://{missing_id}")).is_none());
 
         let bad_ssr = base64::engine::general_purpose::STANDARD.encode("1.2.3.4:0:origin:plain");
