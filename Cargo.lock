@@ -1111,6 +1111,7 @@ dependencies = [
  "clap",
  "dastyab-core",
  "rand 0.8.8",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
