@@ -177,6 +177,7 @@ fn looks_like_config(path: &str) -> bool {
 
 /// Extract links from a repo file body (plain, Base64, JSON, Clash YAML, WG/OVPN,
 /// binary runs, or mixed Persian/English `.txt` drops). Returns validated links.
+#[allow(dead_code)]
 fn extract_links(body: &str) -> Vec<String> {
     crate::tunnel::lion_warrior::extract_all_config_links_from_blob("repo.txt", body.as_bytes())
 }

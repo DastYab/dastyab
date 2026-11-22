@@ -170,7 +170,7 @@ fn extract_message_ids(body: &str) -> Vec<i64> {
 fn trim_trailing_link_punct(raw: &str) -> &str {
     // Strip trailing wrapper punctuation without trimming valid `=` base64 padding
     // or `#fragment` labels unless `#` is literally dangling at the very end.
-    raw.trim_end_matches(|c: char| matches!(c, ')' | '(' | ']' | '[' | ',' | ';'))
+    raw.trim_end_matches([')', '(', ']', '[', ',', ';'])
         .trim_end_matches('#')
 }
 
