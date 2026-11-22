@@ -3657,9 +3657,13 @@ async fn daemon_loop(cfg: dastyab_core::daemon::DaemonConfig) -> Result<(), CFEr
                     );
                     save_daemon_state(&active_profile, &state)?;
                     // Re-exec the (now updated) binary with the same args.
-                    let exe = std::env::current_exe().map_err(|e| {
-                        CFError::new("Daemon", e.to_string(), "Cannot locate the binary.")
-                    })?;
+                    let exe = match std::env::current_exe() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let hint = "Cannot locate the binary.";
+                            return Err(CFError::new("Daemon", e.to_string(), hint));
+                        }
+                    };
                     let _ = std::process::Command::new(exe)
                         .arg("daemon")
                         .arg("start")

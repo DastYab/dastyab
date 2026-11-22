@@ -147,15 +147,19 @@ pub fn load_auto_update_prefs() -> SelfUpdatePrefs {
     read_or_default(&auto_update_prefs_path())
 }
 
+fn upd_err(detail: impl Into<String>, hint: &str) -> CFError {
+    CFError::new("Updater error", detail, hint)
+}
+
 /// Persist auto-update preferences/state atomically.
 pub fn save_auto_update_prefs(prefs: &SelfUpdatePrefs) -> Result<(), CFError> {
-    let bytes = serde_json::to_vec_pretty(prefs).map_err(|e| {
-        CFError::new(
-            "Storage error",
-            format!("Cannot serialize selfupdate prefs: {e}"),
-            "Internal error.",
-        )
-    })?;
+    let bytes = match serde_json::to_vec_pretty(prefs) {
+        Ok(b) => b,
+        Err(e) => {
+            let detail = format!("Cannot serialize selfupdate prefs: {e}");
+            return Err(CFError::new("Storage error", detail, "Internal error."));
+        }
+    };
     atomic_write(&auto_update_prefs_path(), &bytes)
 }
 
@@ -318,14 +322,22 @@ fn build_http_client(
     }
     if let Some(port) = socks_port {
         let url = format!("socks5h://127.0.0.1:{port}");
-        let proxy = reqwest::Proxy::all(url).map_err(|e| {
-            CFError::new("Updater error", format!("Invalid SOCKS5 proxy: {e}"), "")
-        })?;
+        let proxy = match reqwest::Proxy::all(url) {
+            Ok(p) => p,
+            Err(e) => {
+                let detail = format!("Invalid SOCKS5 proxy: {e}");
+                return Err(upd_err(detail, ""));
+            }
+        };
         builder = builder.proxy(proxy);
     }
-    builder.build().map_err(|e| {
-        CFError::new("Updater error", format!("{e}"), "Internal HTTP client error.")
-    })
+    match builder.build() {
+        Ok(c) => Ok(c),
+        Err(e) => {
+            let detail = e.to_string();
+            Err(upd_err(detail, "Internal HTTP client error."))
+        }
+    }
 }
 
 async fn candidate_clients(timeout: Duration, follow_redirects: bool) -> Vec<reqwest::Client> {
@@ -336,11 +348,9 @@ async fn candidate_clients(timeout: Duration, follow_redirects: bool) -> Vec<req
     // Probe local DastYab SOCKS5 proxy ports (multilayer primary + flow) with a
     // short connect check so direct blocks on censored networks fall back cleanly.
     for port in [PROXY_SOCKS_PORT, PROXY_SOCKS_PORT + 10] {
-        let probe = tokio::time::timeout(
-            Duration::from_millis(250),
-            tokio::net::TcpStream::connect(("127.0.0.1", port)),
-        )
-        .await;
+        let wait = Duration::from_millis(250);
+        let conn = tokio::net::TcpStream::connect(("127.0.0.1", port));
+        let probe = tokio::time::timeout(wait, conn).await;
         if matches!(probe, Ok(Ok(_))) {
             if let Ok(proxied) = build_http_client(timeout, Some(port), follow_redirects) {
                 clients.push(proxied);
@@ -357,33 +367,30 @@ async fn fetch_release_via_api(client: &reqwest::Client) -> Result<ReleaseInfo, 
             req = req.header("Authorization", format!("Bearer {token}"));
         }
     }
-    let resp = req.send().await.map_err(|e| {
-        CFError::new(
-            "Updater error",
-            format!("Could not reach GitHub API: {e}"),
-            "Check your network connection.",
-        )
-    })?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let detail = format!("Could not reach GitHub API: {e}");
+            return Err(upd_err(detail, "Check your network connection."));
+        }
+    };
 
     if !resp.status().is_success() {
-        return Err(CFError::new(
-            "Updater error",
-            format!("GitHub API responded HTTP {}", resp.status()),
-            "GitHub may be rate-limiting requests.",
-        ));
+        let detail = format!("GitHub API responded HTTP {}", resp.status());
+        return Err(upd_err(detail, "GitHub may be rate-limiting requests."));
     }
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| {
-        CFError::new("Updater error", format!("{e}"), "Malformed GitHub API response.")
-    })?;
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            let detail = e.to_string();
+            return Err(upd_err(detail, "Malformed GitHub API response."));
+        }
+    };
 
     let tag = body["tag_name"].as_str().unwrap_or("").to_string();
     if tag.is_empty() {
-        return Err(CFError::new(
-            "Updater error",
-            "No release tag found.",
-            "No public release exists yet.",
-        ));
+        return Err(upd_err("No release tag found.", "No public release exists yet."));
     }
 
     let mut assets = Vec::new();
@@ -398,9 +405,10 @@ async fn fetch_release_via_api(client: &reqwest::Client) -> Result<ReleaseInfo, 
         }
     }
 
+    let version = normalize_version(&tag);
     Ok(ReleaseInfo {
-        tag: tag.clone(),
-        version: normalize_version(&tag),
+        tag,
+        version,
         assets,
     })
 }
@@ -410,37 +418,42 @@ async fn fetch_release_via_web_redirect(
     client_follow: &reqwest::Client,
 ) -> Result<ReleaseInfo, CFError> {
     if let Ok(resp) = client_no_redirect.get(RELEASE_LATEST_WEB).send().await {
-        if let Some(loc) = resp.headers().get("location").and_then(|v| v.to_str().ok()) {
+        let loc_hdr = resp.headers().get("location");
+        if let Some(loc) = loc_hdr.and_then(|v| v.to_str().ok()) {
             if let Some(tag) = parse_tag_from_release_url(loc) {
+                let version = normalize_version(&tag);
+                let assets = synthesize_release_assets(&tag);
                 return Ok(ReleaseInfo {
-                    version: normalize_version(&tag),
-                    assets: synthesize_release_assets(&tag),
                     tag,
+                    version,
+                    assets,
                 });
             }
         }
     }
 
-    let resp = client_follow.get(RELEASE_LATEST_WEB).send().await.map_err(|e| {
-        CFError::new(
-            "Updater error",
-            format!("Could not reach GitHub releases page: {e}"),
-            "Check your network connection.",
-        )
-    })?;
+    let resp = match client_follow.get(RELEASE_LATEST_WEB).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let detail = format!("Could not reach GitHub releases page: {e}");
+            return Err(upd_err(detail, "Check your network connection."));
+        }
+    };
     let final_url = resp.url().as_str().to_string();
-    let tag = parse_tag_from_release_url(&final_url).ok_or_else(|| {
-        CFError::new(
-            "Updater error",
-            format!("Unexpected redirect URL for latest release: {final_url}"),
-            "Check GitHub Releases manually.",
-        )
-    })?;
+    let tag = match parse_tag_from_release_url(&final_url) {
+        Some(t) => t,
+        None => {
+            let detail = format!("Unexpected redirect URL for latest release: {final_url}");
+            return Err(upd_err(detail, "Check GitHub Releases manually."));
+        }
+    };
 
+    let version = normalize_version(&tag);
+    let assets = synthesize_release_assets(&tag);
     Ok(ReleaseInfo {
-        version: normalize_version(&tag),
-        assets: synthesize_release_assets(&tag),
         tag,
+        version,
+        assets,
     })
 }
 
@@ -464,14 +477,13 @@ pub async fn latest_release(timeout: Duration) -> Result<ReleaseInfo, CFError> {
         }
     }
 
-    let err = last_err.unwrap_or_else(|| {
-        CFError::new(
-            "Updater error",
-            "Could not reach GitHub Releases.",
-            "Check your network connection or connect DastYab proxy first.",
-        )
-    });
-    Err(err)
+    match last_err {
+        Some(e) => Err(e),
+        None => {
+            let hint = "Check your network connection or connect DastYab proxy first.";
+            Err(upd_err("Could not reach GitHub Releases.", hint))
+        }
+    }
 }
 
 /// Determine whether an update is available. Returns `(available, newest_tag)`.
@@ -542,7 +554,8 @@ pub fn parse_sha256sums(content: &str, filename: &str) -> Option<String> {
         }
         let mut parts = trimmed.splitn(2, char::is_whitespace);
         let hash = parts.next()?.trim();
-        let file = parts.next()?.trim().trim_start_matches('*').trim_start_matches("./");
+        let raw_file = parts.next()?.trim();
+        let file = raw_file.trim_start_matches('*').trim_start_matches("./");
         if file == filename && hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Some(hash.to_ascii_lowercase());
         }
@@ -594,31 +607,23 @@ pub fn verify_binary_payload(
     expected_sha256: Option<&str>,
 ) -> Result<(), CFError> {
     if bytes.len() < 1024 {
-        return Err(CFError::new(
-            "Updater error",
-            format!("Downloaded binary is too small ({} bytes).", bytes.len()),
-            "Download appears truncated or blocked by an error page.",
-        ));
+        let detail = format!("Downloaded binary is too small ({} bytes).", bytes.len());
+        let hint = "Download appears truncated or blocked by an error page.";
+        return Err(upd_err(detail, hint));
     }
     if !has_executable_magic(bytes, os) {
-        return Err(CFError::new(
-            "Updater error",
-            format!("Downloaded file is not a valid {os} executable."),
-            "Network proxy or portal may have intercepted the download.",
-        ));
+        let detail = format!("Downloaded file is not a valid {os} executable.");
+        let hint = "Network proxy or portal may have intercepted the download.";
+        return Err(upd_err(detail, hint));
     }
     if let Some(expected) = expected_sha256 {
         let actual = sha256_hex(bytes);
         if !actual.eq_ignore_ascii_case(expected.trim()) {
-            return Err(CFError::new(
-                "Checksum mismatch",
-                format!(
-                    "SHA-256 mismatch for update binary (expected {}..., got {}...).",
-                    &expected[..expected.len().min(12)],
-                    &actual[..12]
-                ),
-                "Aborting update to protect executable integrity.",
-            ));
+            let exp_short = &expected[..expected.len().min(12)];
+            let got_short = &actual[..12];
+            let detail = format!("SHA-256 mismatch (expected {exp_short}..., got {got_short}...).");
+            let hint = "Aborting update to protect executable integrity.";
+            return Err(CFError::new("Checksum mismatch", detail, hint));
         }
     }
     Ok(())
@@ -663,10 +668,8 @@ async fn fetch_expected_sha256(
     asset_name: &str,
 ) -> Option<String> {
     let checksum_asset = rel.assets.iter().find(|a| a.name == "SHA256SUMS.txt");
-    let fallback_url = format!(
-        "https://github.com/{OWNER}/{REPO}/releases/download/{}/SHA256SUMS.txt",
-        rel.tag
-    );
+    let base = format!("https://github.com/{OWNER}/{REPO}/releases/download");
+    let fallback_url = format!("{base}/{}/SHA256SUMS.txt", rel.tag);
     let urls: Vec<&str> = match checksum_asset {
         Some(a) => vec![a.api_url.as_str(), a.url.as_str(), fallback_url.as_str()],
         None => vec![fallback_url.as_str()],
@@ -707,9 +710,9 @@ enum SwapPlacement {
 
 fn stage_fallback_binary(kind: BinaryKind, payload: &[u8]) -> Result<PathBuf, CFError> {
     let dir = mem_dir().join("bin");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        CFError::new("Storage error", format!("{e}"), "Check permissions.")
-    })?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Err(CFError::new("Storage error", format!("{e}"), "Check permissions."));
+    }
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let target = dir.join(format!("{}-new{ext}", kind.asset_prefix()));
     atomic_write(&target, payload)?;
@@ -732,11 +735,8 @@ fn install_payload_at(
             let staged = stage_fallback_binary(kind, payload)?;
             return Ok(SwapPlacement::Staged(staged));
         }
-        return Err(CFError::new(
-            "Updater error",
-            format!("Write temp binary failed: {e}"),
-            "Check disk space and permissions.",
-        ));
+        let detail = format!("Write temp binary failed: {e}");
+        return Err(upd_err(detail, "Check disk space and permissions."));
     }
 
     #[cfg(unix)]
@@ -751,11 +751,9 @@ fn install_payload_at(
                     let staged = stage_fallback_binary(kind, payload)?;
                     Ok(SwapPlacement::Staged(staged))
                 } else {
-                    Err(CFError::new(
-                        "Updater error",
-                        format!("Binary swap failed: {e}"),
-                        "Close running instances or run with write permission.",
-                    ))
+                    let detail = format!("Binary swap failed: {e}");
+                    let hint = "Close running instances or run with write permission.";
+                    Err(upd_err(detail, hint))
                 }
             }
         }
@@ -771,11 +769,8 @@ fn install_payload_at(
                 Err(e) => {
                     let _ = std::fs::rename(&old, exe);
                     let _ = std::fs::remove_file(&tmp);
-                    Err(CFError::new(
-                        "Updater error",
-                        format!("Binary swap failed (rolled back): {e}"),
-                        "Check antivirus or file locks.",
-                    ))
+                    let detail = format!("Binary swap failed (rolled back): {e}");
+                    Err(upd_err(detail, "Check antivirus or file locks."))
                 }
             },
             Err(e) => {
@@ -784,11 +779,9 @@ fn install_payload_at(
                     let staged = stage_fallback_binary(kind, payload)?;
                     Ok(SwapPlacement::Staged(staged))
                 } else {
-                    Err(CFError::new(
-                        "Updater error",
-                        format!("Cannot move running binary aside: {e}"),
-                        "Run from a user-writable folder or elevate permissions.",
-                    ))
+                    let detail = format!("Cannot move running binary aside: {e}");
+                    let hint = "Run from a user-writable folder or elevate permissions.";
+                    Err(upd_err(detail, hint))
                 }
             }
         }
@@ -835,10 +828,8 @@ pub async fn ensure_updated_with_swap_for(
     };
 
     let clients = candidate_clients(timeout, true).await;
-    let fallback_url = format!(
-        "https://github.com/{OWNER}/{REPO}/releases/download/{}/{}",
-        rel.tag, asset.name
-    );
+    let base = format!("https://github.com/{OWNER}/{REPO}/releases/download");
+    let fallback_url = format!("{base}/{}/{}", rel.tag, asset.name);
     let urls: [&str; 3] = [&asset.api_url, &asset.url, &fallback_url];
     let Some(body) = download_bytes_resilient(&clients, &urls, true).await else {
         let msg = "All download endpoints failed.";
@@ -853,9 +844,10 @@ pub async fn ensure_updated_with_swap_for(
         return Ok(UpdateOutcome::Failed(msg));
     }
 
-    let exe = std::env::current_exe().map_err(|e| {
-        CFError::new("Updater error", e.to_string(), "Cannot locate the binary.")
-    })?;
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => return Err(upd_err(e.to_string(), "Cannot locate the binary.")),
+    };
     match install_payload_at(&exe, kind, &body) {
         Ok(SwapPlacement::ReplacedInPlace) => {
             let note = format!("Updated {} to {}", kind.label(), rel.tag);
@@ -863,13 +855,11 @@ pub async fn ensure_updated_with_swap_for(
             Ok(UpdateOutcome::Updated { tag: rel.tag })
         }
         Ok(SwapPlacement::Staged(path)) => {
-            let p = path.display().to_string();
-            let note = format!("Staged {} {} at {p}", kind.label(), rel.tag);
+            let path = path.display().to_string();
+            let note = format!("Staged {} {} at {path}", kind.label(), rel.tag);
             mark_auto_checked(Some(&rel.tag), Some(&rel.tag), Some(&note));
-            Ok(UpdateOutcome::Staged {
-                tag: rel.tag,
-                path: p,
-            })
+            let tag = rel.tag;
+            Ok(UpdateOutcome::Staged { tag, path })
         }
         Err(e) => {
             let msg = e.brief();
@@ -888,18 +878,19 @@ pub async fn ensure_updated_with_swap(timeout: Duration) -> Result<UpdateOutcome
 pub async fn apply_update_for(kind: BinaryKind, timeout: Duration) -> Result<String, CFError> {
     match ensure_updated_with_swap_for(kind, timeout).await? {
         UpdateOutcome::UpToDate => Ok("Already on the latest version.".to_string()),
-        UpdateOutcome::Updated { tag } => Ok(format!(
-            "Updated {} to {tag}. Restart DastYab to run the new version.",
-            kind.label()
-        )),
-        UpdateOutcome::Staged { tag, path } => {
-            Ok(format!("Verified {tag} staged at {path} (read-only install dir)."))
+        UpdateOutcome::Updated { tag } => {
+            let label = kind.label();
+            let msg = format!("Updated {label} to {tag}. Restart DastYab to use it.");
+            Ok(msg)
         }
-        UpdateOutcome::Failed(msg) => Err(CFError::new(
-            "Updater error",
-            msg,
-            "Retry later or download manually from GitHub Releases.",
-        )),
+        UpdateOutcome::Staged { tag, path } => {
+            let msg = format!("Verified {tag} staged at {path} (read-only install dir).");
+            Ok(msg)
+        }
+        UpdateOutcome::Failed(msg) => {
+            let hint = "Retry later or download manually from GitHub Releases.";
+            Err(upd_err(msg, hint))
+        }
     }
 }
 
@@ -949,26 +940,23 @@ mod tests {
         assert_eq!(picked.unwrap().url, "u1");
     }
 
+    fn pick(assets: &[ReleaseAsset], k: BinaryKind, os: &str, arch: &str) -> Option<String> {
+        asset_for_target(assets, k, os, arch).map(|a| a.name)
+    }
+
     #[test]
     fn edition_asset_selection_covers_all_platforms_and_kinds() {
         let assets = synthesize_release_assets("v0.9.0");
-        assert_eq!(
-            asset_for_target(&assets, BinaryKind::Cli, "linux", "x86_64").map(|a| a.name),
-            Some("dastyab-linux-amd64".to_string())
-        );
-        assert_eq!(
-            asset_for_target(&assets, BinaryKind::Gui, "linux", "aarch64").map(|a| a.name),
-            Some("dastyab-gui-linux-arm64".to_string())
-        );
-        assert_eq!(
-            asset_for_target(&assets, BinaryKind::Tui, "windows", "x86_64").map(|a| a.name),
-            Some("dastyab-tui-windows-amd64.exe".to_string())
-        );
-        assert_eq!(
-            asset_for_target(&assets, BinaryKind::Gui, "macos", "aarch64").map(|a| a.name),
-            Some("dastyab-gui-macos-arm64".to_string())
-        );
-        assert!(asset_for_target(&assets, BinaryKind::Cli, "android", "aarch64").is_none());
+        let p1 = pick(&assets, BinaryKind::Cli, "linux", "x86_64");
+        assert_eq!(p1.as_deref(), Some("dastyab-linux-amd64"));
+        let p2 = pick(&assets, BinaryKind::Gui, "linux", "aarch64");
+        assert_eq!(p2.as_deref(), Some("dastyab-gui-linux-arm64"));
+        let p3 = pick(&assets, BinaryKind::Tui, "windows", "x86_64");
+        assert_eq!(p3.as_deref(), Some("dastyab-tui-windows-amd64.exe"));
+        let p4 = pick(&assets, BinaryKind::Gui, "macos", "aarch64");
+        assert_eq!(p4.as_deref(), Some("dastyab-gui-macos-arm64"));
+        let p5 = pick(&assets, BinaryKind::Cli, "android", "aarch64");
+        assert!(p5.is_none());
     }
 
     #[test]
@@ -981,18 +969,12 @@ mod tests {
 
     #[test]
     fn parse_tag_from_web_redirect_url() {
-        assert_eq!(
-            parse_tag_from_release_url("https://github.com/DastYab/dastyab/releases/tag/v0.4.0"),
-            Some("v0.4.0".to_string())
-        );
-        assert_eq!(
-            parse_tag_from_release_url("/DastYab/dastyab/releases/tag/v1.2.3?foo=1"),
-            Some("v1.2.3".to_string())
-        );
-        assert_eq!(
-            parse_tag_from_release_url("https://github.com/DastYab/dastyab/releases/latest"),
-            None
-        );
+        let u1 = "https://github.com/DastYab/dastyab/releases/tag/v0.4.0";
+        assert_eq!(parse_tag_from_release_url(u1).as_deref(), Some("v0.4.0"));
+        let u2 = "/DastYab/dastyab/releases/tag/v1.2.3?foo=1";
+        assert_eq!(parse_tag_from_release_url(u2).as_deref(), Some("v1.2.3"));
+        let u3 = "https://github.com/DastYab/dastyab/releases/latest";
+        assert!(parse_tag_from_release_url(u3).is_none());
     }
 
     #[test]
@@ -1000,11 +982,10 @@ mod tests {
         let mut elf = vec![0x7f, b'E', b'L', b'F'];
         elf.resize(2048, 0xAA);
         let digest = sha256_hex(&elf);
-        let sums = format!(
-            "{digest}  dastyab-linux-amd64\n\
-             0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef *other-file\n"
-        );
-        assert_eq!(parse_sha256sums(&sums, "dastyab-linux-amd64"), Some(digest.clone()));
+        let other = "0".repeat(64);
+        let sums = format!("{digest}  dastyab-linux-amd64\n{other} *other-file\n");
+        let parsed = parse_sha256sums(&sums, "dastyab-linux-amd64");
+        assert_eq!(parsed.as_deref(), Some(digest.as_str()));
         assert!(verify_binary_payload(&elf, "linux", Some(&digest)).is_ok());
 
         let bad_digest = "0".repeat(64);
@@ -1041,12 +1022,12 @@ mod tests {
         let u2 = UpdateOutcome::Updated { tag: "v2".into() };
         assert_eq!(u1, u1.clone());
         assert_ne!(u1, u2);
-        let s1 = UpdateOutcome::Staged {
-            tag: "v1".into(),
-            path: "/tmp/a".into(),
-        };
+        let tag = "v1".into();
+        let path = "/tmp/a".into();
+        let s1 = UpdateOutcome::Staged { tag, path };
         assert_eq!(s1, s1.clone());
-        assert_eq!(UpdateOutcome::Failed("x".into()), UpdateOutcome::Failed("x".into()));
+        let f1 = UpdateOutcome::Failed("x".into());
+        assert_eq!(f1, f1.clone());
     }
 
     #[test]

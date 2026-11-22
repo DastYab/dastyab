@@ -75,9 +75,10 @@ struct AutoUpdateUiState {
 impl AutoUpdateUiState {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel();
+        let ver = dastyab_core::VERSION;
         Self {
             checking: false,
-            status: format!("v{} · auto-update ready (press 'u' to check)", dastyab_core::VERSION),
+            status: format!("v{ver} · auto-update ready (press 'u' to check)"),
             ready_tag: None,
             rx,
             tx,
@@ -119,8 +120,7 @@ impl AutoUpdateUiState {
                 }
                 Ok(UpdateOutcome::Updated { tag }) => {
                     self.ready_tag = Some(tag.clone());
-                    self.status =
-                        format!("Update {tag} installed — press 'r' to restart DastYab TUI now");
+                    self.status = format!("Update {tag} installed — press 'r' to restart TUI");
                 }
                 Ok(UpdateOutcome::Staged { tag, path }) => {
                     self.status = format!("Update {tag} staged at {path} (read-only dir)");
@@ -280,9 +280,8 @@ fn render_overview(
         let p = load_profile(&m.id);
         total_clean += p.clean_ips.len();
         total_configs += p.history.len();
-        total_pool_nodes += dastyab_core::artifact::config_store::load_node_store(&m.id)
-            .nodes
-            .len();
+        let pool = dastyab_core::artifact::config_store::load_node_store(&m.id);
+        total_pool_nodes += pool.nodes.len();
     }
 
     lines.push(Line::raw(""));
@@ -408,15 +407,13 @@ fn render_links(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
                 }
             }
             for node in pool.nodes.iter().take(6) {
+                let src = format!("[{}] ", node.source);
                 lines.push(Line::from(vec![
-                    Span::styled(format!("[{}] ", node.source), Style::default().fg(GOLD)),
+                    Span::styled(src, Style::default().fg(GOLD)),
                     Span::styled(node.alias.clone(), Style::default().fg(TEXT)),
                 ]));
                 let clipped: String = node.url.chars().take(90).collect();
-                lines.push(Line::from(Span::styled(
-                    clipped,
-                    Style::default().fg(GOLD_DIM),
-                )));
+                lines.push(Line::from(Span::styled(clipped, Style::default().fg(GOLD_DIM))));
             }
         }
     }

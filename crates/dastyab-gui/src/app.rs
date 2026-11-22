@@ -1894,41 +1894,12 @@ impl DastYabApp {
                     }
                     Some(PendingDialogAction::ImportConfigsFromPath) => {
                         if let DialogPayload::Text(raw_path) = payload {
-                            let path = std::path::PathBuf::from(raw_path.trim());
-                            if !path.exists() {
-                                self.note = format!("File not found: {}", path.display());
-                            } else {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        use dastyab_core::lion_warrior as lw;
-                                        let fname = path
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("configs.txt");
-                                        let links = lw::extract_all_config_links_from_blob(
-                                            fname, &bytes,
-                                        );
-                                        let store_res =
-                                            dastyab_core::config_store::import_links_bulk_source(
-                                                &self.profile_id,
-                                                &links,
-                                                dastyab_core::config_store::SOURCE_MANUAL,
-                                            );
-                                        match store_res {
-                                            Ok(s) => {
-                                                self.state.reload_pending = true;
-                                                self.note = format!(
-                                                    "Imported {} config(s) (+{} new, {} dup) from {}",
-                                                    s.found, s.added, s.duplicates, fname
-                                                );
-                                            }
-                                            Err(e) => self.note = e.brief(),
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.note = format!("Read error: {e}");
-                                    }
+                            match import_configs_from_file(&self.profile_id, raw_path.trim()) {
+                                Ok(msg) => {
+                                    self.state.reload_pending = true;
+                                    self.note = msg;
                                 }
+                                Err(msg) => self.note = msg,
                             }
                         }
                     }
@@ -2598,38 +2569,31 @@ impl DastYabApp {
 
         if let Some(tag) = self.update_ready_tag.clone() {
             ui.add_space(4.0);
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgb(16, 48, 26))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 190, 110)))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let msg = if let Some(path) = &self.update_staged_path {
-                            format!(
-                                "⬇ Update {tag} verified and staged at {path} (install dir is read-only)."
-                            )
-                        } else {
-                            format!(
-                                "⬇ DastYab GUI {tag} downloaded & verified — restart to switch to the new version."
-                            )
-                        };
-                        ui.label(
-                            egui::RichText::new(msg).color(egui::Color32::from_rgb(180, 245, 195)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("✕")
-                                .on_hover_text("Dismiss update banner")
-                                .clicked()
-                            {
-                                self.update_ready_tag = None;
-                            }
-                            let can_restart = self.update_staged_path.is_none();
-                            if can_restart && ui.button("↻ Restart Now").clicked() {
-                                self.restart_into_updated_app(ui.ctx());
-                            }
-                        });
+            let fill = egui::Color32::from_rgb(16, 48, 26);
+            let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 190, 110));
+            egui::Frame::new().fill(fill).stroke(stroke).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let msg = if let Some(path) = &self.update_staged_path {
+                        format!("⬇ Update {tag} staged at {path} (read-only dir).")
+                    } else {
+                        format!("⬇ DastYab GUI {tag} ready — restart to update.")
+                    };
+                    let col = egui::Color32::from_rgb(180, 245, 195);
+                    let rich = egui::RichText::new(msg).color(col);
+                    ui.label(rich);
+                    let rtl = egui::Layout::right_to_left(egui::Align::Center);
+                    ui.with_layout(rtl, |ui| {
+                        let close = ui.small_button("✕").on_hover_text("Dismiss update");
+                        if close.clicked() {
+                            self.update_ready_tag = None;
+                        }
+                        let can_restart = self.update_staged_path.is_none();
+                        if can_restart && ui.button("↻ Restart Now").clicked() {
+                            self.restart_into_updated_app(ui.ctx());
+                        }
                     });
                 });
+            });
         }
 
         if !self.note.is_empty() {
@@ -2683,9 +2647,10 @@ impl DastYabApp {
             self.update_status = format!("Verified {tag} staged at {path}");
             self.push_log(&format!("[selfupdate] staged {tag} at {path}"));
         } else if let Some(manual_str) = summary.strip_prefix("UP_TO_DATE::") {
-            self.update_status = format!("Up to date (v{})", dastyab_core::VERSION);
+            let ver = dastyab_core::VERSION;
+            self.update_status = format!("Up to date (v{ver})");
             if manual_str == "true" {
-                self.note = format!("✓ You are on the latest version (v{}).", dastyab_core::VERSION);
+                self.note = format!("✓ You are on the latest version (v{ver}).");
             }
             self.push_log("[selfupdate] up to date");
         } else if let Some(rest) = summary.strip_prefix("FAILED::") {
@@ -3446,18 +3411,15 @@ impl DastYabApp {
         crate::views::section_card(ui, "Automatic updates (GitHub Releases)", |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Installed version:").color(GOLD_DIM));
-                ui.label(
-                    egui::RichText::new(format!("v{}", dastyab_core::VERSION))
-                        .color(TEXT)
-                        .strong(),
-                );
-                if ui.checkbox(&mut self.auto_update_enabled, "Auto-update on launch").changed() {
-                    if let Err(e) = dastyab_core::selfupdate::set_auto_update_enabled(
-                        self.auto_update_enabled,
-                    ) {
+                let ver = format!("v{}", dastyab_core::VERSION);
+                ui.label(egui::RichText::new(ver).color(TEXT).strong());
+                let chk = ui.checkbox(&mut self.auto_update_enabled, "Auto-update on launch");
+                if chk.changed() {
+                    let enabled = self.auto_update_enabled;
+                    if let Err(e) = dastyab_core::selfupdate::set_auto_update_enabled(enabled) {
                         self.note = e.brief();
                     } else {
-                        self.note = if self.auto_update_enabled {
+                        self.note = if enabled {
                             "Auto-update enabled.".to_string()
                         } else {
                             "Auto-update disabled.".to_string()
@@ -3465,19 +3427,16 @@ impl DastYabApp {
                     }
                 }
             });
-            ui.label(egui::RichText::new(&self.update_status).color(GOLD_DIM).small());
+            let rt = egui::RichText::new(&self.update_status).color(GOLD_DIM);
+            ui.label(rt.small());
             ui.horizontal(|ui| {
                 let busy = self.running.iter().any(|t| t == "selfupdate");
-                if ui
-                    .add_enabled(!busy, egui::Button::new("⬇ Check & Update Now"))
-                    .clicked()
-                {
+                let upd_btn = egui::Button::new("⬇ Check & Update Now");
+                if ui.add_enabled(!busy, upd_btn).clicked() {
                     self.spawn_selfupdate(true);
                 }
-                if self.update_ready_tag.is_some()
-                    && self.update_staged_path.is_none()
-                    && ui.button("↻ Restart Now").clicked()
-                {
+                let ready = self.update_ready_tag.is_some() && self.update_staged_path.is_none();
+                if ready && ui.button("↻ Restart Now").clicked() {
                     self.restart_into_updated_app(ui.ctx());
                 }
             });
@@ -4815,6 +4774,27 @@ fn create_configs_from_ip(profile_id: &str, endpoint: &str) -> Result<(usize, St
     let _ = dastyab_core::cf::ips::learn_clean_ip(profile_id, &ip);
 
     Ok((n, base_link))
+}
+
+fn import_configs_from_file(profile_id: &str, raw_path: &str) -> Result<String, String> {
+    use dastyab_core::config_store::{import_links_bulk_source, SOURCE_MANUAL};
+    use dastyab_core::lion_warrior::extract_all_config_links_from_blob;
+
+    let path = std::path::PathBuf::from(raw_path);
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("Read error: {e}"))?;
+    let name_os = path.file_name();
+    let fname = name_os.and_then(|n| n.to_str()).unwrap_or("configs.txt");
+    let links = extract_all_config_links_from_blob(fname, &bytes);
+    match import_links_bulk_source(profile_id, &links, SOURCE_MANUAL) {
+        Ok(s) => {
+            let counts = format!("{} (+{} new, {} dup)", s.found, s.added, s.duplicates);
+            Ok(format!("Imported {counts} from {fname}"))
+        }
+        Err(e) => Err(e.brief()),
+    }
 }
 
 async fn run_gui_selfupdate(manual: bool) -> String {
@@ -6280,11 +6260,11 @@ mod tests {
     fn gui_selfupdate_bridge_events_update_banner_state() {
         with_home(|pid| {
             let (mut app, tx) = test_app(pid, vec!["selfupdate".into()]);
-            tx.send(crate::bridge::UiEvent::Done {
+            let ev = crate::bridge::UiEvent::Done {
                 task: "selfupdate".into(),
                 summary: "UPDATED::v0.9.5".into(),
-            })
-            .unwrap();
+            };
+            tx.send(ev).unwrap();
             let ctx = egui::Context::default();
             app.poll_bridge(&ctx);
             assert!(app.running.is_empty());
