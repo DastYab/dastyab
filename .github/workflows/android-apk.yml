@@ -24,6 +24,12 @@ on:
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      version:
+        description: 'Release version to stamp into the APK (e.g. v0.8.2). Empty keeps build.gradle.kts as is.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,6 +40,19 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+
+      - name: Stamp release version into the APK
+        if: ${{ inputs.version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          V="${V#v}"
+          CORE="${V%%-*}"
+          IFS=. read -r MA MI PA <<< "$CORE"
+          CODE=$(( 10#${MA:-0} * 10000 + 10#${MI:-0} * 100 + 10#${PA:-0} ))
+          sed -i -E "s/versionName = \"[^\"]*\"/versionName = \"${V}\"/; s/versionCode = [0-9]+/versionCode = ${CODE}/" android/app/build.gradle.kts
+          grep -n -E 'versionName|versionCode' android/app/build.gradle.kts
 
       - name: Install Rust targets
         uses: dtolnay/rust-toolchain@stable
@@ -181,9 +200,7 @@ jobs:
           APK="${apks[0]}"
           test -f "$APK"
           bash scripts/android-verify-apk.sh "$APK"
-          VERSION=$(grep -o 'versionName = "[^"]*"' android/app/build.gradle.kts | cut -d'"' -f2)
-          test -n "$VERSION"
-          RELEASE_APK="DastYab-${VERSION}-android.apk"
+          RELEASE_APK="DastYab-android.apk"
           cp "$APK" "$RELEASE_APK"
           test -f "$RELEASE_APK"
           echo "RELEASE_APK=$RELEASE_APK" >> "$GITHUB_ENV"

@@ -13,8 +13,22 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${V}"
+
   build:
     name: build-${{ matrix.artifact }}
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,6 +72,15 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.artifact }}-release-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.artifact }}-release-cargo-
+
+      - name: Stamp release version into Cargo workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ needs.version.outputs.version }}"
+          perl -0pi -e 's/(\[workspace\.package\][^\[]*?\nversion\s*=\s*)"[^"]*"/${1}"'"$V"'"/' Cargo.toml
+          grep -n -A3 '^\[workspace.package\]' Cargo.toml
+          grep -q "^version = \"$V\"" Cargo.toml || { echo "version stamp failed" >&2; exit 1; }
 
       - name: Build workspace (release)
         run: cargo build --release --workspace
@@ -117,7 +140,10 @@ jobs:
 
   build-apk:
     name: build-apk (tested Android app)
+    needs: version
     uses: ./.github/workflows/android-apk.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
 
   release:
     name: Create GitHub release
