@@ -323,8 +323,7 @@ pub fn normalize_subscription_url(raw: &str) -> Option<String> {
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))?;
     let host = after.split(['/', '?', '#']).next().unwrap_or("");
-    if host.is_empty()
-        || (!host.contains('.') && host != "localhost" && !host.starts_with("127."))
+    if host.is_empty() || (!host.contains('.') && host != "localhost" && !host.starts_with("127."))
     {
         return None;
     }
@@ -353,7 +352,10 @@ pub fn normalize_telegram_channel(raw: &str) -> Option<String> {
 
     let clean = handle.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
     if clean.len() < 3
-        || matches!(clean.to_ascii_lowercase().as_str(), "s" | "proxy" | "joinchat" | "share")
+        || matches!(
+            clean.to_ascii_lowercase().as_str(),
+            "s" | "proxy" | "joinchat" | "share"
+        )
         || !clean.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
         return None;
@@ -367,10 +369,9 @@ pub fn normalize_telegram_post(raw: &str) -> Option<(String, u64)> {
     let lower = s.to_ascii_lowercase();
     let tail = if let Some(idx) = lower.find("t.me/") {
         &s[idx + "t.me/".len()..]
-    } else if let Some(idx) = lower.find("telegram.me/") {
-        &s[idx + "telegram.me/".len()..]
     } else {
-        return None;
+        let idx = lower.find("telegram.me/")?;
+        &s[idx + "telegram.me/".len()..]
     };
     let tail = tail.strip_prefix("s/").unwrap_or(tail);
     let clean_path = tail.split(['?', '#']).next().unwrap_or("");
@@ -520,13 +521,14 @@ pub fn add_source(
     input: &str,
     name: Option<&str>,
 ) -> Result<HarvestSource, CFError> {
-    let (kind, value, default_name) = classify_source_input(input, explicit_kind).ok_or_else(|| {
-        CFError::new(
+    let (kind, value, default_name) =
+        classify_source_input(input, explicit_kind).ok_or_else(|| {
+            CFError::new(
             "sources",
             format!("unrecognized source '{input}'"),
             "Provide a GitHub URL, HTTP/HTTPS subscription URL, @channel, or t.me/ch/id post link.",
         )
-    })?;
+        })?;
     let label = name
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -808,7 +810,10 @@ async fn fetch_single_source(
 
 fn extract_sni_for_tls_probe(parsed: &ProxyUri) -> Option<String> {
     let canon = parsed.canonical_scheme();
-    if !matches!(canon, "vless" | "trojan" | "anytls" | "naive+https" | "naive" | "https") {
+    if !matches!(
+        canon,
+        "vless" | "trojan" | "anytls" | "naive+https" | "naive" | "https"
+    ) {
         return None;
     }
     let query = parsed
@@ -872,7 +877,12 @@ async fn probe_single_link(link: String, timeout_ms: u64) -> Option<TestedLink> 
                 None
             }
         };
-        if tokio::time::timeout(dur, tls_fut).await.ok().flatten().is_some() {
+        if tokio::time::timeout(dur, tls_fut)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
             tls_verified = true;
             final_ms = start.elapsed().as_millis() as u64;
         }
@@ -1045,10 +1055,10 @@ mod tests {
         );
         let mirrors = mirror_urls_for_raw(&gh.1);
         assert_eq!(mirrors.len(), 3);
-        assert!(mirrors[1]
-            .starts_with("https://cdn.jsdelivr.net/gh/barry-far/V2ray-Configs@main/"));
-        assert!(mirrors[2]
-            .starts_with("https://cdn.statically.io/gh/barry-far/V2ray-Configs/main/"));
+        assert!(mirrors[1].starts_with("https://cdn.jsdelivr.net/gh/barry-far/V2ray-Configs@main/"));
+        assert!(
+            mirrors[2].starts_with("https://cdn.statically.io/gh/barry-far/V2ray-Configs/main/")
+        );
 
         let sub = classify_source_input("https://example.org/sub/abc123", None).unwrap();
         assert_eq!(sub.0, SourceKind::SubscriptionUrl);
@@ -1068,8 +1078,8 @@ mod tests {
         let _guard = MemDirGuard::new(&tmp);
         let profile = "default";
 
-        let added = add_source(profile, None, "https://example.org/feed.txt", Some("MySub"))
-            .unwrap();
+        let added =
+            add_source(profile, None, "https://example.org/feed.txt", Some("MySub")).unwrap();
         assert_eq!(added.kind, SourceKind::SubscriptionUrl);
         assert!(load_sources(profile).iter().any(|s| s.id == added.id));
 

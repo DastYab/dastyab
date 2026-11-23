@@ -274,9 +274,7 @@ pub async fn fetch_repo_links(
             continue;
         };
         let fname = path.rsplit('/').next().unwrap_or(&path);
-        all.extend(
-            crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes),
-        );
+        all.extend(crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes));
     }
     Ok(all)
 }

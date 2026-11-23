@@ -1861,7 +1861,9 @@ mod tests {
         );
         let links = extract_proxy_links(html);
         assert_eq!(links.len(), 5, "got: {links:?}");
-        assert!(links.iter().any(|l| l.starts_with("https://alice:secret@proxy.example.com:8443")));
+        assert!(links
+            .iter()
+            .any(|l| l.starts_with("https://alice:secret@proxy.example.com:8443")));
         assert!(links.iter().any(|l| l.starts_with("naive+https://")));
         assert!(links.iter().any(|l| l.starts_with("juicity://")));
         assert!(links.iter().any(|l| l.starts_with("anytls://")));
