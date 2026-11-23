@@ -100,6 +100,129 @@ pub async fn fetch_channel_links_async(
     Ok(fetch_preview_page(client, channel, None).await?.links)
 }
 
+/// Fetch a single public Telegram post (`https://t.me/<channel>/<post_id>?embed=1`,
+/// with fallback to `t.me/s/<channel>/<post_id>`) and extract all proxy share-links,
+/// base64 blobs, Clash YAML, Sing-box JSON, WireGuard INI, and OpenVPN configs.
+pub async fn fetch_post_links_async(
+    client: &reqwest::Client,
+    channel: &str,
+    post_id: u64,
+) -> Result<Vec<String>, CFError> {
+    let clean_ch = channel.trim().trim_start_matches('@');
+    if clean_ch.is_empty() || post_id == 0 {
+        return Err(CFError::new(
+            "harvest",
+            "invalid Telegram post reference",
+            "Expected t.me/<channel>/<post_id>.",
+        ));
+    }
+    let urls = [
+        format!("{}/{clean_ch}/{post_id}?embed=1", telegram_base_url()),
+        format!("{}/s/{clean_ch}/{post_id}", telegram_base_url()),
+    ];
+    let mut last_err = None;
+    for url in &urls {
+        crate::trust::stealth::pre_request_pause("read").await;
+        let resp = match client.get(url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(e.to_string());
+                continue;
+            }
+        };
+        if resp.status().as_u16() != 200 {
+            last_err = Some(format!("HTTP {}", resp.status()));
+            continue;
+        }
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = Some(e.to_string());
+                continue;
+            }
+        };
+        let mut links = crate::tunnel::lion_warrior::extract_all_config_links_from_blob(
+            "post.html",
+            body.as_bytes(),
+        );
+        for l in extract_proxy_links(&body) {
+            if !links.contains(&l) {
+                links.push(l);
+            }
+        }
+        return Ok(crate::net::proxy_uri::deduplicate_links(&links));
+    }
+    Err(CFError::new(
+        "harvest",
+        format!(
+            "t.me/{clean_ch}/{post_id} failed: {}",
+            last_err.unwrap_or_else(|| "unreachable".to_string())
+        ),
+        "Check network/proxy or verify the public post exists.",
+    ))
+}
+
+/// Normalize a protocol filter token (`hy2` -> `hysteria2`, `wg` -> `wireguard`,
+/// `socks` -> `socks5`).
+pub fn canonical_protocol_name(proto: &str) -> &str {
+    match proto.trim().to_ascii_lowercase().as_str() {
+        "hy2" => "hysteria2",
+        "wg" => "wireguard",
+        "socks" => "socks5",
+        "ovpn" => "openvpn",
+        "vless" => "vless",
+        "vmess" => "vmess",
+        "trojan" => "trojan",
+        "ss" | "shadowsocks" => "ss",
+        "ssr" => "ssr",
+        "hysteria" => "hysteria",
+        "hysteria2" => "hysteria2",
+        "tuic" => "tuic",
+        "wireguard" => "wireguard",
+        "socks5" => "socks5",
+        "socks4" => "socks4",
+        "http" => "http",
+        "https" => "https",
+        "naive" | "naive+https" => "naive+https",
+        "naive+quic" => "naive+quic",
+        "juicity" => "juicity",
+        "anytls" => "anytls",
+        "mtproto" => "mtproto",
+        _ => proto.trim(),
+    }
+}
+
+/// Filter share-links by a comma-separated protocol filter (e.g. `"vless,hy2"`).
+/// Empty or `"all"`/`"*"` returns all links unchanged.
+pub fn filter_links_by_protocol(links: &[String], filter: &str) -> Vec<String> {
+    let trimmed = filter.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") || trimmed == "*" {
+        return links.to_vec();
+    }
+    let targets: Vec<String> = trimmed
+        .split(',')
+        .map(|s| canonical_protocol_name(s).to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if targets.is_empty() {
+        return links.to_vec();
+    }
+    links
+        .iter()
+        .filter(|link| {
+            let Some(parsed) = crate::net::proxy_uri::ProxyUri::parse(link) else {
+                return false;
+            };
+            let p_raw = parsed.scheme.as_str();
+            let p_canon = parsed.canonical_scheme();
+            targets
+                .iter()
+                .any(|t| t == p_raw || t == p_canon || (t == "naive+https" && p_canon == "naive"))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Fetch one page of a channel's public preview. `before` optionally requests
 /// only messages *older* than that id (archive traversal — this is how we dig
 /// into archived chats for configs that are long gone from the latest page).
@@ -187,12 +310,7 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
         }
     };
 
-    let schemes = crate::net::proxy_uri::SUPPORTED_SCHEMES
-        .iter()
-        .copied()
-        .chain(std::iter::once("http"));
-
-    for scheme in schemes {
+    for scheme in crate::net::proxy_uri::SUPPORTED_SCHEMES.iter().copied() {
         let marker = format!("{scheme}://");
         for (pos, _) in body.match_indices(marker.as_str()) {
             if pos > 0 {
@@ -230,6 +348,11 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
                         | "socks4"
                         | "socks"
                         | "http"
+                        | "https"
+                        | "hysteria"
+                        | "naive+https"
+                        | "naive+quic"
+                        | "naive"
                         | "sn"
                         | "dnstt"
                         | "slipnet"
@@ -239,7 +362,9 @@ pub fn extract_proxy_links(body: &str) -> Vec<String> {
             }
             let decoded = tail.replace("&amp;", "&");
             let link = format!("{scheme}://{decoded}");
-            if scheme == "http" && crate::net::proxy_uri::is_non_proxy_http_url(&link) {
+            if matches!(scheme, "http" | "https")
+                && crate::net::proxy_uri::is_non_proxy_http_url(&link)
+            {
                 continue;
             }
             if crate::net::proxy_uri::ProxyUri::parse(&link).is_some() {
@@ -1102,6 +1227,106 @@ pub async fn harvest_channel_async_depth(
     harvest
 }
 
+/// Fetch multi-page preview links and config attachments from a channel without
+/// mutating `config_store`, returning deduplicated extracted share-links.
+pub async fn fetch_channel_links_depth_async(
+    client: &reqwest::Client,
+    channel: &str,
+    depth: usize,
+) -> Result<Vec<String>, CFError> {
+    let chan = channel.trim().trim_start_matches('@');
+    if chan.is_empty() {
+        return Err(CFError::new(
+            "harvest",
+            "empty Telegram channel handle",
+            "Provide a valid t.me channel handle.",
+        ));
+    }
+    let depth = depth.clamp(1, MAX_ARCHIVE_DEPTH);
+    let mut cursor: Option<i64> = None;
+    let mut out: Vec<String> = Vec::new();
+    let mut attachment_urls: Vec<String> = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+    let mut last_err: Option<CFError> = None;
+
+    for _ in 0..depth {
+        match fetch_preview_page(client, chan, cursor).await {
+            Ok(page) => {
+                out.extend(page.links);
+                for file_url in extract_config_file_urls(&page.body) {
+                    if attachment_urls.len() < MAX_ATTACHMENT_FILES_PER_CHANNEL
+                        && seen_urls.insert(file_url.clone())
+                    {
+                        attachment_urls.push(file_url);
+                    }
+                }
+                let min = page.ids.iter().min().copied();
+                if min != cursor && min.is_some() {
+                    cursor = min;
+                } else {
+                    break;
+                }
+            }
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+
+    if out.is_empty() && attachment_urls.is_empty() {
+        if let Some(err) = last_err {
+            return Err(err);
+        }
+    }
+
+    for file_url in attachment_urls {
+        let Ok(resp) = client.get(&file_url).send().await else {
+            continue;
+        };
+        if resp.status().as_u16() != 200 {
+            continue;
+        }
+        let Ok(bytes) = resp.bytes().await else {
+            continue;
+        };
+        if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT_FILE_BYTES {
+            continue;
+        }
+        let fname = file_url
+            .split(['?', '#'])
+            .next()
+            .and_then(|u| u.rsplit('/').next())
+            .unwrap_or("attachment.txt");
+        out.extend(crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes));
+    }
+
+    Ok(crate::net::proxy_uri::deduplicate_links(&out))
+}
+
+/// Concurrently fetch multi-page links across `channels` using `client` without
+/// mutating `config_store`.
+pub async fn fetch_many_channel_links_depth(
+    client: &reqwest::Client,
+    channels: &[String],
+    concurrency: usize,
+    depth: usize,
+) -> Vec<(String, Result<Vec<String>, CFError>)> {
+    use futures_util::stream::StreamExt;
+    let conc = concurrency.clamp(1, 8);
+    futures_util::stream::iter(channels.iter().cloned())
+        .map(|ch| {
+            let client = client.clone();
+            async move {
+                let res = fetch_channel_links_depth_async(&client, &ch, depth).await;
+                (ch, res)
+            }
+        })
+        .buffer_unordered(conc)
+        .collect()
+        .await
+}
+
 /// Single-page harvest (maintained for backward compatibility).
 pub async fn harvest_channel_async(
     client: &reqwest::Client,
@@ -1619,5 +1844,33 @@ mod tests {
             !loaded.channels.is_empty(),
             "harvest_channels.json must be non-empty"
         );
+    }
+
+    #[test]
+    fn extract_proxy_links_and_filter_cover_https_naive_hysteria_and_anytls() {
+        let html = concat!(
+            "<div class=\"tgme_widget_message_text\">",
+            "https://github.com/owner/repo<br/>",
+            "https://t.me/v2ray_config/42<br/>",
+            "https://alice:secret@proxy.example.com:8443<br/>",
+            "naive+https://user:pw@naive.example.com:443#Naive<br/>",
+            "juicity://ju-uuid:pw@ju.example.com:443#Juicity<br/>",
+            "anytls://anypw@any.example.com:443#AnyTLS<br/>",
+            "hysteria://hy1.example.com:443?auth=hy1tok#Hy1<br/>",
+            "</div>"
+        );
+        let links = extract_proxy_links(html);
+        assert_eq!(links.len(), 5, "got: {links:?}");
+        assert!(links.iter().any(|l| l.starts_with("https://alice:secret@proxy.example.com:8443")));
+        assert!(links.iter().any(|l| l.starts_with("naive+https://")));
+        assert!(links.iter().any(|l| l.starts_with("juicity://")));
+        assert!(links.iter().any(|l| l.starts_with("anytls://")));
+        assert!(links.iter().any(|l| l.starts_with("hysteria://")));
+
+        let only_hy = filter_links_by_protocol(&links, "hysteria");
+        assert_eq!(only_hy.len(), 1);
+        let only_any = filter_links_by_protocol(&links, "anytls,juicity");
+        assert_eq!(only_any.len(), 2);
+        assert_eq!(filter_links_by_protocol(&links, "all").len(), 5);
     }
 }

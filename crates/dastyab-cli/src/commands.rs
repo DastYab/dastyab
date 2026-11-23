@@ -341,28 +341,64 @@ pub async fn run(
             hops,
             max_candidates,
             include_saved,
+            protocol,
+            test,
+            sources,
         } => {
             cmd_harvest(
                 &profile,
                 &channels,
-                proxy,
-                depth,
-                discover,
+                HarvestOpts {
+                    proxy,
+                    depth,
+                    discover,
+                    include_saved,
+                    protocol,
+                    test,
+                    sources,
+                },
                 DiscoverOpts {
                     save,
                     hops,
                     max_candidates,
                 },
-                include_saved,
             )
             .await
         }
         Command::Sources {
             action,
+            arg,
             profile,
             proxy,
             repos,
-        } => cmd_sources(&profile, &action, proxy, &repos).await,
+            kind,
+            name,
+            format,
+            path,
+            replace,
+            protocol,
+            test,
+            depth,
+        } => {
+            cmd_sources(
+                &profile,
+                &action,
+                SourcesOpts {
+                    arg,
+                    proxy,
+                    repos,
+                    kind,
+                    name,
+                    format,
+                    path,
+                    replace,
+                    protocol,
+                    test,
+                    depth,
+                },
+            )
+            .await
+        }
         Command::Anchors {
             action,
             profile,
@@ -411,16 +447,224 @@ pub async fn run(
     }
 }
 
-async fn cmd_sources(profile: &str, action: &str, proxy: bool, repos: &str) -> Result<(), CFError> {
-    use dastyab_core::gh_sources;
+struct SourcesOpts {
+    arg: Option<String>,
+    proxy: bool,
+    repos: String,
+    kind: String,
+    name: String,
+    format: String,
+    path: String,
+    replace: bool,
+    protocol: String,
+    test: bool,
+    depth: usize,
+}
+
+fn print_unified_harvest_report(rep: &dastyab_core::sources::UnifiedHarvestReport) {
+    println!(
+        "[sources] harvested {} / {} source(s), raw={} filtered={} added={} duplicates={}",
+        rep.sources_ok,
+        rep.sources_attempted,
+        rep.raw_links_found,
+        rep.filtered_links,
+        rep.added,
+        rep.duplicates
+    );
+    if !rep.tested.is_empty() {
+        println!("[sources] reachable configs (sorted by latency):");
+        for item in &rep.tested {
+            let tls_tag = if item.tls_verified { "TLS✓" } else { "TCP " };
+            println!(
+                "  {:>4}ms  [{tls_tag}]  {:<10}  {}:{}  {}",
+                item.latency_ms, item.protocol, item.host, item.port, item.uri
+            );
+        }
+    }
+    for (src_name, err) in &rep.errors {
+        eprintln!("  warn [{src_name}]: {err}");
+    }
+}
+
+async fn cmd_sources(profile: &str, action: &str, opts: SourcesOpts) -> Result<(), CFError> {
+    use dastyab_core::{gh_sources, sources};
+
     match action {
+        "list" => {
+            let list = sources::load_sources(profile);
+            println!(
+                "[sources] {} source(s) in profile '{profile}':",
+                list.len()
+            );
+            for s in &list {
+                let state = if s.enabled { "ON " } else { "OFF" };
+                let stats = if s.attempt_count > 0 {
+                    format!(
+                        "last={}s found={} ok={}%",
+                        s.last_fetch_ts,
+                        s.configs_found,
+                        s.success_rate()
+                    )
+                } else {
+                    "unfetched".to_string()
+                };
+                println!(
+                    "  [{state}] {:<17} {:<32} {}  ({})",
+                    s.kind.as_str(),
+                    s.name.chars().take(32).collect::<String>(),
+                    s.value,
+                    stats
+                );
+            }
+            Ok(())
+        }
+        "add" => {
+            let input = opts
+                .arg
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    CFError::new(
+                        "sources",
+                        "missing source value to add",
+                        "Usage: dastyab sources add <url|@channel|t.me/ch/id> [--kind ...]",
+                    )
+                })?;
+            let kind = if opts.kind.trim().is_empty() {
+                None
+            } else {
+                Some(sources::SourceKind::from_token(&opts.kind).ok_or_else(|| {
+                    CFError::new(
+                        "sources",
+                        format!("unknown source kind '{}'", opts.kind),
+                        "Use: github_raw | subscription_url | telegram_channel | telegram_post",
+                    )
+                })?)
+            };
+            let label = if opts.name.trim().is_empty() {
+                None
+            } else {
+                Some(opts.name.as_str())
+            };
+            let added = sources::add_source(profile, kind, input, label)?;
+            println!(
+                "[sources] added {} ({}) -> {}",
+                added.name,
+                added.kind.as_str(),
+                added.id
+            );
+            Ok(())
+        }
+        "remove" | "rm" | "del" => {
+            let query = opts
+                .arg
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    CFError::new(
+                        "sources",
+                        "missing source id/value/name to remove",
+                        "Usage: dastyab sources remove <id|value|name>",
+                    )
+                })?;
+            if sources::remove_source(profile, query)? {
+                println!("[sources] removed '{query}'");
+            } else {
+                println!("[sources] no source matched '{query}'");
+            }
+            Ok(())
+        }
+        "enable" | "disable" => {
+            let enable = action == "enable";
+            let query = opts
+                .arg
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    CFError::new(
+                        "sources",
+                        format!("missing source id/value/name to {action}"),
+                        "Usage: dastyab sources enable|disable <id|value|name>",
+                    )
+                })?;
+            if sources::set_source_enabled(profile, query, enable)? {
+                println!("[sources] {action}d '{query}'");
+            } else {
+                println!("[sources] no source matched '{query}'");
+            }
+            Ok(())
+        }
+        "export" => {
+            let fmt = if opts.format == "auto" {
+                "json"
+            } else {
+                opts.format.as_str()
+            };
+            let payload = sources::export_sources(profile, fmt)?;
+            if opts.path.trim().is_empty() {
+                println!("{payload}");
+            } else {
+                std::fs::write(opts.path.trim(), payload.as_bytes()).map_err(|e| {
+                    CFError::new("sources", format!("write failed: {e}"), "Check file path.")
+                })?;
+                println!("[sources] exported ({fmt}) to {}", opts.path.trim());
+            }
+            Ok(())
+        }
+        "import" => {
+            let raw = if !opts.path.trim().is_empty() {
+                std::fs::read_to_string(opts.path.trim()).map_err(|e| {
+                    CFError::new("sources", format!("read failed: {e}"), "Check file path.")
+                })?
+            } else if let Some(inline) = opts.arg.as_deref().filter(|s| !s.trim().is_empty()) {
+                inline.to_string()
+            } else {
+                let mut stdin_buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin_buf).map_err(
+                    |e| CFError::new("sources", format!("stdin read failed: {e}"), ""),
+                )?;
+                stdin_buf
+            };
+            let summary =
+                sources::import_sources(profile, &raw, &opts.format, opts.replace)?;
+            println!(
+                "[sources] imported: added={} updated={} skipped={} total={}",
+                summary.added, summary.updated, summary.skipped, summary.total
+            );
+            Ok(())
+        }
+        "reset" => {
+            let defs = sources::reset_sources(profile)?;
+            println!(
+                "[sources] reset profile '{profile}' to {} built-in sources",
+                defs.len()
+            );
+            Ok(())
+        }
+        "harvest" => {
+            let rep = sources::harvest_enabled_sources(
+                profile,
+                opts.proxy,
+                opts.depth,
+                &opts.protocol,
+                opts.test,
+                true,
+            )
+            .await?;
+            print_unified_harvest_report(&rep);
+            Ok(())
+        }
         "ingest" | "refresh" => {
-            let extra: Vec<String> = repos
+            let extra: Vec<String> = opts
+                .repos
                 .split(',')
                 .map(|r| r.trim().to_string())
                 .filter(|r| !r.is_empty())
                 .collect();
-            let report = gh_sources::ingest_github(profile, proxy, &extra).await;
+            let report = gh_sources::ingest_github(profile, opts.proxy, &extra).await;
             println!("[sources] GitHub ingestion pass:");
             println!("  repos ok: {}", report.repos_ok.len());
             for r in &report.repos_ok {
@@ -438,7 +682,7 @@ async fn cmd_sources(profile: &str, action: &str, proxy: bool, repos: &str) -> R
         other => Err(CFError::new(
             "sources",
             format!("unknown action '{other}'"),
-            "Use: ingest | refresh",
+            "Use: list | add | remove | enable | disable | import | export | reset | harvest | ingest | refresh",
         )),
     }
 }
@@ -1181,32 +1425,33 @@ struct DiscoverOpts {
     max_candidates: usize,
 }
 
-async fn cmd_harvest(
-    profile: &str,
-    channels: &str,
+struct HarvestOpts {
     proxy: bool,
     depth: usize,
     discover: bool,
-    d: DiscoverOpts,
     include_saved: bool,
+    protocol: String,
+    test: bool,
+    sources: bool,
+}
+
+async fn cmd_harvest(
+    profile: &str,
+    channels: &str,
+    opts: HarvestOpts,
+    d: DiscoverOpts,
 ) -> Result<(), CFError> {
-    use dastyab_core::harvest;
+    use dastyab_core::{config_store, harvest, proxy_uri, sources};
 
     // Systematic discovery mode: probe candidates, print live yield, and
     // optionally persist the yielding channels for future refill passes.
-    // Discovery is **self-expanding**: after probing the hardcoded seeds, we
-    // crawl the cross-referenced channels on the *yielding* seeds for up to
-    // `hops` expansion rounds, probing each round's new finds too — so the
-    // archived-chat net grows systematically from what actually works, never
-    // hardcoded/circular (doctrine §5). The global `max_candidates` budget
-    // bounds the whole walk (doctrine §6.5: never flood the transport).
-    if discover {
+    if opts.discover {
         let report = harvest::run_multi_hop_discovery(
             profile,
-            proxy,
+            opts.proxy,
             d.hops,
             d.max_candidates,
-            depth,
+            opts.depth,
             d.save,
         )
         .await?;
@@ -1229,15 +1474,26 @@ async fn cmd_harvest(
         return Ok(());
     }
 
+    if opts.sources {
+        let rep = sources::harvest_enabled_sources(
+            profile,
+            opts.proxy,
+            opts.depth,
+            &opts.protocol,
+            opts.test,
+            true,
+        )
+        .await?;
+        print_unified_harvest_report(&rep);
+        return Ok(());
+    }
+
     let mut list: Vec<String> = channels
         .split(',')
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
         .collect();
-    // Self-expanding net: merge every previously-discovered channel that once
-    // yielded, so production harvest always includes the full archived-chat
-    // mining net (doctrine §5: never circular, never forget a source).
-    if include_saved {
+    if opts.include_saved {
         for c in harvest::load_discovered_channels(profile).channels {
             if !list.contains(&c) {
                 list.push(c);
@@ -1255,10 +1511,65 @@ async fn cmd_harvest(
         eprintln!("no channels given");
         return Ok(());
     }
+
+    if !opts.protocol.trim().is_empty() || opts.test {
+        let client = harvest::build_client(opts.proxy)?;
+        let conc = list.len().clamp(1, 8);
+        let fetched =
+            harvest::fetch_many_channel_links_depth(&client, &list, conc, opts.depth).await;
+
+        let mut all_links = Vec::new();
+        for (ch, res) in fetched {
+            match res {
+                Ok(links) => {
+                    println!("[{ch}] fetched {} raw link(s)", links.len());
+                    all_links.extend(links);
+                }
+                Err(e) => eprintln!("[{ch}] fetch failed: {}", e.brief()),
+            }
+        }
+
+        let deduped = proxy_uri::deduplicate_links(&all_links);
+        let filtered = harvest::filter_links_by_protocol(&deduped, &opts.protocol);
+        let final_links = if opts.test {
+            let tested = sources::test_links_latency(&filtered, 3000, 24).await;
+            println!(
+                "[harvest] tested {} -> {} reachable (sorted fastest-first)",
+                filtered.len(),
+                tested.len()
+            );
+            for item in &tested {
+                let tls_tag = if item.tls_verified { "TLS✓" } else { "TCP " };
+                println!(
+                    "  {:>4}ms  [{tls_tag}]  {:<10}  {}:{}  {}",
+                    item.latency_ms, item.protocol, item.host, item.port, item.uri
+                );
+            }
+            tested.into_iter().map(|t| t.uri).collect::<Vec<_>>()
+        } else {
+            filtered
+        };
+
+        if final_links.is_empty() {
+            println!("[harvest] no matching reachable configs to import");
+        } else {
+            let summary = config_store::import_links_bulk_source(
+                profile,
+                &final_links,
+                config_store::SOURCE_TELEGRAM,
+            )?;
+            println!(
+                "[harvest] imported: found={} added={} duplicates={} invalid={}",
+                summary.found, summary.added, summary.duplicates, summary.skipped_invalid
+            );
+        }
+        return Ok(());
+    }
+
     // Concurrent, connection-pooled harvest: one shared async client across
     // all channels (TLS keep-alive reuse), bounded in-flight fetches.
     let concurrency = list.len().min(8);
-    let results = harvest::harvest_many(profile, &list, proxy, concurrency, depth).await;
+    let results = harvest::harvest_many(profile, &list, opts.proxy, concurrency, opts.depth).await;
 
     for (channel, h) in results {
         if let Some(err) = &h.fetch_error {
@@ -5584,15 +5895,20 @@ async fn cmd_configs(
                 cmd_harvest(
                     profile,
                     channels,
-                    proxy,
-                    depth,
-                    false,
+                    HarvestOpts {
+                        proxy,
+                        depth,
+                        discover: false,
+                        include_saved: true,
+                        protocol: String::new(),
+                        test: false,
+                        sources: false,
+                    },
                     DiscoverOpts {
                         save: false,
                         hops: 1,
                         max_candidates: 60,
                     },
-                    true,
                 )
                 .await?;
             }

@@ -67,4 +67,69 @@ class HarvestSourceStoreTest {
             HarvestSourceStore.extractHostAndPort("tg://proxy?server=185.1.2.3&port=8443&secret=dd00")
         )
     }
+
+    @Test
+    fun classifySourceInput_andBulkSources_handlesAllFourTypes() {
+        val raw = """
+            github_raw | Barry VLESS | https://github.com/barry-far/V2ray-Configs/blob/main/Splitted-By-Protocol/vless.txt
+            https://sub.example.com/api/v1/client/subscribe?token=abc
+            @whitedns
+            https://t.me/s/FarazV2ray/12345
+        """.trimIndent()
+        val parsed = HarvestSourceStore.parseBulkSources(raw)
+        assertEquals(4, parsed.size)
+        assertEquals(HarvestSourceStore.SourceType.GITHUB_RAW, parsed[0].type)
+        assertEquals(
+            "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+            parsed[0].value
+        )
+        assertEquals("Barry VLESS", parsed[0].name)
+        assertEquals(HarvestSourceStore.SourceType.SUBSCRIPTION_URL, parsed[1].type)
+        assertEquals(HarvestSourceStore.SourceType.TELEGRAM_CHANNEL, parsed[2].type)
+        assertEquals("whitedns", parsed[2].value)
+        assertEquals(HarvestSourceStore.SourceType.TELEGRAM_POST, parsed[3].type)
+        assertEquals("https://t.me/FarazV2ray/12345", parsed[3].value)
+    }
+
+    @Test
+    fun jsonAndTextExportImport_roundTripsSourcesAndStats() {
+        val sources = listOf(
+            HarvestSourceStore.HarvestSource(
+                id = "github_raw:https://raw.githubusercontent.com/a/b/main/sub.txt",
+                name = "Feed A",
+                type = HarvestSourceStore.SourceType.GITHUB_RAW,
+                value = "https://raw.githubusercontent.com/a/b/main/sub.txt",
+                enabled = true,
+                isDefault = false,
+                lastFetchTimeMs = 1710000000000L,
+                configsFound = 42,
+                attemptCount = 4,
+                successCount = 3
+            ),
+            HarvestSourceStore.HarvestSource(
+                id = "telegram_post:https://t.me/whitedns/99",
+                name = "Post 99",
+                type = HarvestSourceStore.SourceType.TELEGRAM_POST,
+                value = "https://t.me/whitedns/99",
+                enabled = false,
+                attemptCount = 2,
+                successCount = 1
+            )
+        )
+        assertEquals(75, sources[0].successRate)
+        assertEquals(50, sources[1].successRate)
+
+        val json = HarvestSourceStore.serializeSourcesJson(sources)
+        val restored = HarvestSourceStore.parseSourcesJson(json)
+        assertEquals(2, restored.size)
+        assertEquals("Feed A", restored[0].name)
+        assertEquals(42, restored[0].configsFound)
+        assertEquals(75, restored[0].successRate)
+        assertEquals(false, restored[1].enabled)
+        assertEquals(HarvestSourceStore.SourceType.TELEGRAM_POST, restored[1].type)
+
+        val text = HarvestSourceStore.exportSourcesText(sources)
+        val fromText = HarvestSourceStore.parseBulkSources(text)
+        assertEquals(2, fromText.size)
+    }
 }

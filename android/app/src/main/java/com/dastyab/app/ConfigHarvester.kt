@@ -1,10 +1,12 @@
 package com.dastyab.app
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.widget.Toast
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -230,7 +232,21 @@ object ConfigHarvester {
         "v2rayng_org",
         "PrivateVPNs",
         "DirectVPN",
-        "vless_vmess"
+        "vless_vmess",
+        "v2ray_outlineir",
+        "V2rayNGn",
+        "outline_vpn",
+        "v2ray_configs_pool",
+        "VlessConfig",
+        "FreeV2rays",
+        "v2ray_saz",
+        "meli_proxyy",
+        "V2RayRoot",
+        "ShadowSocks_s",
+        "v2rayng_vpnrog",
+        "iranproxy98",
+        "Warp_ir",
+        "v2ray_free_conf"
     )
 
     /** Curated circumvention & blackout rescue tools (including user-requested GitHub projects). */
@@ -411,6 +427,93 @@ object ConfigHarvester {
         if (parts.size < 4) return null
         val (owner, repo, branch, path) = parts
         return "https://cdn.jsdelivr.net/gh/$owner/$repo@$branch/$path"
+    }
+
+    /** Builds a GitHub raw URL -> Statically CDN mirror URL if possible. */
+    fun toStaticallyMirror(rawGithubUrl: String): String? {
+        val prefix = "https://raw.githubusercontent.com/"
+        if (!rawGithubUrl.startsWith(prefix, ignoreCase = true)) return null
+        val rest = rawGithubUrl.substring(prefix.length)
+        val parts = rest.split('/', limit = 4)
+        if (parts.size < 4) return null
+        val (owner, repo, branch, path) = parts
+        return "https://cdn.statically.io/gh/$owner/$repo/$branch/$path"
+    }
+
+    /** Returns ordered fallback URLs for any feed (`raw` -> `cdn.jsdelivr.net` -> `cdn.statically.io`). */
+    fun toMirrorUrls(url: String): List<String> {
+        val raw = HarvestSourceStore.normalizeGithubUrl(url) ?: return emptyList()
+        val out = LinkedHashSet<String>()
+        out.add(raw)
+        toJsDelivrMirror(raw)?.let { out.add(it) }
+        toStaticallyMirror(raw)?.let { out.add(it) }
+        return out.toList()
+    }
+
+    /** Extracts the smallest numeric message ID from `data-post="<channel>/<id>"` tags in a `t.me/s/<channel>` HTML page. */
+    fun extractMinTelegramPostId(html: String, channel: String): Long? {
+        val escaped = Regex.escape(channel.trim().removePrefix("@"))
+        val postRegex = Regex("""data-post=["']$escaped/(\d+)["']""", RegexOption.IGNORE_CASE)
+        var minId: Long? = null
+        for (m in postRegex.findAll(html)) {
+            val id = m.groupValues[1].toLongOrNull() ?: continue
+            if (minId == null || id < minId) {
+                minId = id
+            }
+        }
+        return minId
+    }
+
+    /** Scrapes up to [maxPages] recent pages of a public Telegram channel (`t.me/s/<channel>?before=<id>`). */
+    fun fetchTelegramChannelPages(
+        channel: String,
+        maxPages: Int = 3,
+        timeoutMs: Int = 4500
+    ): List<String> {
+        val clean = HarvestSourceStore.normalizeTelegramChannel(channel) ?: return emptyList()
+        val pages = ArrayList<String>()
+        var cursor: Long? = null
+        val total = maxPages.coerceIn(1, 5)
+        for (pageIdx in 0 until total) {
+            val url = if (cursor == null) {
+                "https://t.me/s/$clean"
+            } else {
+                "https://t.me/s/$clean?before=$cursor"
+            }
+            val html = httpGet(url, timeoutMs) ?: break
+            if (html.isBlank()) break
+            pages.add(html)
+            val minId = extractMinTelegramPostId(html, clean) ?: break
+            if (cursor != null && minId >= cursor) break
+            if (minId <= 1L) break
+            cursor = minId
+        }
+        return pages
+    }
+
+    /** Fetches a single Telegram post (`https://t.me/<channel>/<id>?embed=1`, falling back to `/s/<channel>/<id>`). */
+    fun fetchTelegramPostBody(postUrl: String, timeoutMs: Int = 4500): String? {
+        val norm = HarvestSourceStore.normalizeTelegramPost(postUrl) ?: return null
+        val embedBody = httpGet("$norm?embed=1", timeoutMs)
+        if (!embedBody.isNullOrBlank()) return embedBody
+        val slug = norm.substringAfter("t.me/")
+        return httpGet("https://t.me/s/$slug", timeoutMs)
+    }
+
+    /** Returns true when [uri] belongs to the requested protocol [filter] (case-insensitive, alias-aware). */
+    fun matchesProtocolFilter(uri: String, filter: String): Boolean {
+        val cleanFilter = filter.trim().lowercase()
+        if (cleanFilter.isEmpty() || cleanFilter == "all") return true
+        val proto = UniversalConfig.canonicalProtocol(protocolOf(uri))
+        if (cleanFilter == "http/https" || cleanFilter == "http_https") {
+            return proto == "http" || proto == "https"
+        }
+        return proto == UniversalConfig.canonicalProtocol(cleanFilter)
+    }
+
+    /** Filters and deduplicates [configs] by canonical protocol and `protocol+host+port+id`. */
+    fun filterByProtocol(configs: Collection<String>, protocolFilter: String): List<String> {
+        return UniversalConfig.deduplicate(configs).filter { matchesProtocolFilter(it, protocolFilter) }
     }
 
     /** Detects which fallback circumvention apps are installed on this Android device. */
@@ -756,6 +859,267 @@ object ConfigHarvester {
             TunnelConfig.saveHarvestedProxyHops(context, diverse)
         }
         return diverse
+    }
+
+    data class UnifiedHarvestResult(
+        val configs: List<String>,
+        val sourcesAttempted: Int,
+        val sourcesSucceeded: Int,
+        val usedMirror: Boolean,
+        val downloadedFilesCount: Int,
+        val log: List<String>
+    )
+
+    /**
+     * Concurrently harvests all enabled sources from [HarvestSourceStore.getAllSources]
+     * (`GITHUB_RAW` with 3-mirror fallback, `SUBSCRIPTION_URL`, `TELEGRAM_CHANNEL` multi-page
+     * scraping via `?before=`, and `TELEGRAM_POST` single-post embeds), updates per-source stats,
+     * deduplicates by `protocol+host+port+id`, applies optional [protocolFilter], and saves offline.
+     */
+    fun harvestFromUnifiedSources(
+        context: Context,
+        protocolFilter: String = "all",
+        telegramPages: Int = 3,
+        maxConcurrency: Int = 8,
+        onProgress: (String) -> Unit = {}
+    ): UnifiedHarvestResult {
+        val sources = HarvestSourceStore.getAllSources(context).filter { it.enabled }
+        val log = ArrayList<String>()
+        fun step(msg: String) {
+            log.add(msg)
+            onProgress(msg)
+        }
+        if (sources.isEmpty()) {
+            step("No enabled sources in Source Manager.")
+            return UnifiedHarvestResult(emptyList(), 0, 0, false, 0, log)
+        }
+
+        step("Harvesting ${sources.size} enabled sources (filter=${protocolFilter.ifBlank { "all" }})…")
+        data class SingleSourceOutcome(
+            val source: HarvestSourceStore.HarvestSource,
+            val uris: List<String>,
+            val fileCount: Int,
+            val success: Boolean,
+            val usedMirror: Boolean,
+            val note: String
+        )
+
+        val allUris = LinkedHashSet<String>()
+        var succeeded = 0
+        var usedMirror = false
+        var totalFiles = 0
+
+        val pool = Executors.newFixedThreadPool(maxConcurrency.coerceIn(2, 12))
+        try {
+            val tasks = sources.map { src ->
+                Callable {
+                    when (src.type) {
+                        HarvestSourceStore.SourceType.GITHUB_RAW,
+                        HarvestSourceStore.SourceType.SUBSCRIPTION_URL -> {
+                            val candidates = toMirrorUrls(src.value)
+                            var extracted = emptyList<String>()
+                            var filesFound = 0
+                            var ok = false
+                            var mirrored = false
+                            for ((idx, candidateUrl) in candidates.withIndex()) {
+                                val body = httpGet(candidateUrl, timeoutMs = 5500) ?: continue
+                                val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(
+                                    context,
+                                    body,
+                                    src.name,
+                                    maxDownloadsPerSource = 6
+                                )
+                                filesFound += files.count { it.isDownloadedLocally }
+                                extracted = (extractProxyConfigs(body, maxConfigs = 4096) + fileUris).distinct()
+                                if (extracted.isNotEmpty() || files.isNotEmpty()) {
+                                    ok = true
+                                    mirrored = idx > 0
+                                    break
+                                }
+                            }
+                            val via = if (mirrored) " (CDN mirror)" else ""
+                            val note = if (ok) "✓ ${src.name}$via: +${extracted.size}" else "✗ ${src.name}"
+                            SingleSourceOutcome(src, extracted, filesFound, ok, mirrored, note)
+                        }
+                        HarvestSourceStore.SourceType.TELEGRAM_CHANNEL -> {
+                            val pages = fetchTelegramChannelPages(src.value, maxPages = telegramPages, timeoutMs = 4500)
+                            if (pages.isEmpty()) {
+                                SingleSourceOutcome(src, emptyList(), 0, false, false, "✗ @${src.value}")
+                            } else {
+                                val found = LinkedHashSet<String>()
+                                var filesFound = 0
+                                pages.forEachIndexed { pageIdx, pageHtml ->
+                                    if (pageIdx == 0) {
+                                        val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(
+                                            context = context,
+                                            rawBody = pageHtml,
+                                            sourceLabel = "@${src.value}",
+                                            maxDownloadsPerSource = 6
+                                        )
+                                        filesFound += files.count { it.isDownloadedLocally }
+                                        found.addAll(fileUris)
+                                    }
+                                    found.addAll(extractProxyConfigs(pageHtml, maxConfigs = 4096))
+                                }
+                                val list = found.toList()
+                                val ok = list.isNotEmpty() || filesFound > 0
+                                val note = if (ok) {
+                                    "✓ @${src.value} (${pages.size}p): +${list.size}"
+                                } else {
+                                    "✗ @${src.value} (0 configs)"
+                                }
+                                SingleSourceOutcome(src, list, filesFound, ok, false, note)
+                            }
+                        }
+                        HarvestSourceStore.SourceType.TELEGRAM_POST -> {
+                            val body = fetchTelegramPostBody(src.value, timeoutMs = 4500)
+                            if (body.isNullOrBlank()) {
+                                SingleSourceOutcome(src, emptyList(), 0, false, false, "✗ ${src.name}")
+                            } else {
+                                val (files, fileUris) = ConfigFileHarvester.harvestFilesFromBody(
+                                    context = context,
+                                    rawBody = body,
+                                    sourceLabel = src.name,
+                                    maxDownloadsPerSource = 6
+                                )
+                                val filesFound = files.count { it.isDownloadedLocally }
+                                val list = (extractProxyConfigs(body, maxConfigs = 4096) + fileUris).distinct()
+                                val ok = list.isNotEmpty() || filesFound > 0
+                                val note = if (ok) "✓ ${src.name}: +${list.size}" else "✗ ${src.name} (0 configs)"
+                                SingleSourceOutcome(src, list, filesFound, ok, false, note)
+                            }
+                        }
+                    }
+                }
+            }
+            val futures = pool.invokeAll(tasks, 35, TimeUnit.SECONDS)
+            for (future in futures) {
+                val res = runCatching { future.get() }.getOrNull() ?: continue
+                HarvestSourceStore.recordFetchResult(context, res.source.id, res.uris.size, res.success)
+                if (res.success) {
+                    succeeded++
+                    allUris.addAll(res.uris)
+                }
+                if (res.usedMirror) usedMirror = true
+                totalFiles += res.fileCount
+                step("  ${res.note}")
+            }
+        } catch (_: Exception) {
+        } finally {
+            pool.shutdownNow()
+        }
+
+        val filtered = filterByProtocol(allUris, protocolFilter)
+        val merged = UniversalConfig.mergeBalanced(filtered, limit = 4096)
+        if (merged.isNotEmpty()) {
+            TunnelConfig.saveHarvestedConfigs(context, merged)
+        }
+        val hops = UniversalConfig.extractChainableProxyHops(allUris)
+        if (hops.isNotEmpty()) {
+            val combinedHops = (hops + TunnelConfig.loadHarvestedProxyHops(context))
+                .distinctBy { "${it.scheme.name}:${it.host}:${it.port}" }
+            TunnelConfig.saveHarvestedProxyHops(context, combinedHops)
+        }
+        step("Done: ${merged.size} unique configs ($succeeded/${sources.size} sources OK).")
+        return UnifiedHarvestResult(
+            configs = merged,
+            sourcesAttempted = sources.size,
+            sourcesSucceeded = succeeded,
+            usedMirror = usedMirror,
+            downloadedFilesCount = totalFiles,
+            log = log
+        )
+    }
+
+    /**
+     * Benchmarks [configs] concurrently with TLS/SNI + TCP probes, sorts fastest-first,
+     * and keeps only reachable endpoints by default.
+     */
+    fun testAndRankConfigs(
+        configs: List<String>,
+        maxToTest: Int = 45,
+        timeoutMs: Int = 2000,
+        keepOnlyReachable: Boolean = true
+    ): List<HarvestSourceStore.ConfigProbeResult> {
+        val ranked = HarvestSourceStore.benchmarkHarvestedConfigs(
+            configs = configs,
+            maxToTest = maxToTest,
+            timeoutMs = timeoutMs,
+            verifyTls = true
+        )
+        return if (keepOnlyReachable) ranked.filter { it.reachable } else ranked
+    }
+
+    const val CLIENT_PACKAGE_V2RAYNG = "com.v2ray.ang"
+    const val CLIENT_PACKAGE_HIDDIFY = "app.hiddify.com"
+    const val CLIENT_PACKAGE_NEKOBOX = "moe.nb4a"
+
+    /** Renders newline-separated share URIs for clipboard copy, text export, or v2rayNG import. */
+    fun toPlainTextExport(configs: Collection<String>): String {
+        return configs.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    /** Renders standard Base64 subscription payload (pure Kotlin, no Android runtime dependency). */
+    fun toBase64Subscription(configs: Collection<String>): String {
+        val plain = toPlainTextExport(configs)
+        if (plain.isEmpty()) return ""
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        val bytes = plain.toByteArray(Charsets.UTF_8)
+        val out = StringBuilder(((bytes.size + 2) / 3) * 4)
+        var i = 0
+        while (i < bytes.size) {
+            val b0 = bytes[i].toInt() and 0xFF
+            val b1 = if (i + 1 < bytes.size) bytes[i + 1].toInt() and 0xFF else 0
+            val b2 = if (i + 2 < bytes.size) bytes[i + 2].toInt() and 0xFF else 0
+            out.append(alphabet[b0 ushr 2])
+            out.append(alphabet[((b0 and 0x03) shl 4) or (b1 ushr 4)])
+            out.append(if (i + 1 < bytes.size) alphabet[((b1 and 0x0F) shl 2) or (b2 ushr 6)] else '=')
+            out.append(if (i + 2 < bytes.size) alphabet[b2 and 0x3F] else '=')
+            i += 3
+        }
+        return out.toString()
+    }
+
+    /**
+     * Copies exported configs to the clipboard and shares directly to [packageName] (v2rayNG /
+     * Hiddify / NekoBox) via Android Share Sheet / direct package intent.
+     */
+    fun shareToExternalClient(
+        context: Context,
+        packageName: String,
+        clientLabel: String,
+        configs: Collection<String>
+    ): Boolean {
+        val payload = toPlainTextExport(configs)
+        if (payload.isEmpty()) return false
+        UiSafety.copyTextSafely(context, "DastYab $clientLabel Export", payload)
+
+        val installed = isPackageInstalled(context.packageManager, packageName)
+        if (installed) {
+            val targetedSend = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, payload)
+                setPackage(packageName)
+            }
+            if (UiSafety.safeStartActivity(context, targetedSend)) return true
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null && UiSafety.safeStartActivity(context, launchIntent)) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.source_mgr_copied_for_client, clientLabel),
+                    Toast.LENGTH_LONG
+                ).show()
+                return true
+            }
+        }
+        val chooser = Intent.createChooser(
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, payload)
+            },
+            clientLabel
+        )
+        return UiSafety.safeStartActivity(context, chooser)
     }
 
     private fun httpGet(urlStr: String, timeoutMs: Int): String? {

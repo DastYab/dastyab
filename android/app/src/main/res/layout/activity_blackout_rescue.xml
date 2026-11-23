@@ -149,6 +149,14 @@
                 android:layout_marginTop="10dp"
                 android:text="@string/rescue_btn_file_vault"
                 style="@style/DastyabButton" />
+
+            <Button
+                android:id="@+id/btnOpenSourceManager"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/rescue_btn_manage_sources"
+                style="@style/DastyabButton" />
         </LinearLayout>
 
         <View

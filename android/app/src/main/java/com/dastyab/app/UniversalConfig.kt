@@ -37,7 +37,8 @@ object UniversalConfig {
         val family: Family,
         val host: String,
         val port: Int,
-        val label: String
+        val label: String,
+        val id: String = ""
     ) {
         fun summary(): String {
             val tag = if (label.isNotBlank()) "$label · " else ""
@@ -52,7 +53,7 @@ object UniversalConfig {
         "wireguard", "wg", "warp", "amneziawg",
         "openvpn", "ovpn",
         "npv4", "npvs", "npvt", "npv", "napsternetv",
-        "socks5", "socks4", "socks", "http", "ssh",
+        "socks5", "socks4", "socks", "http", "https", "ssh",
         "sn", "dnstt", "slipnet",
         "mtproto"
     )
@@ -74,7 +75,7 @@ object UniversalConfig {
     )
 
     private val HTTP_PROXY_URI_REGEX = Regex(
-        """(?<![A-Za-z0-9+.-])http://(?:[^\s"'<>`\\@]+@)?(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):(\d{1,5})(?:/)?(?:#[^\s"'<>`\\]*)?(?=[\s"'<>`,;|#\r\n]|$)""",
+        """(?<![A-Za-z0-9+.-])https?://(?:[^\s"'<>`\\@]+@)?(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):(\d{1,5})(?:/)?(?:#[^\s"'<>`\\]*)?(?=[\s"'<>`,;|#\r\n]|$)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -91,7 +92,8 @@ object UniversalConfig {
     private val WEB_NON_PROXY_HOSTS = setOf(
         "t.me", "telegram.me", "telegram.dog",
         "github.com", "raw.githubusercontent.com", "gist.github.com",
-        "cdn.jsdelivr.net", "youtube.com", "www.youtube.com", "youtu.be",
+        "cdn.jsdelivr.net", "cdn.statically.io",
+        "youtube.com", "www.youtube.com", "youtu.be",
         "twitter.com", "x.com", "instagram.com", "google.com", "www.google.com"
     )
 
@@ -100,18 +102,17 @@ object UniversalConfig {
     /** Returns true when an HTTP(S) URL is a web/channel/repo link (t.me, github.com, etc.), NOT an explicit proxy endpoint. */
     fun isNonProxyHttpUrl(raw: String): Boolean {
         val trimmed = raw.trim()
-        if (trimmed.startsWith("https://", ignoreCase = true)) return true
-        if (!trimmed.startsWith("http://", ignoreCase = true)) return false
-        val rest = trimmed.substring(7)
+        val offset = when {
+            trimmed.startsWith("https://", ignoreCase = true) -> 8
+            trimmed.startsWith("http://", ignoreCase = true) -> 7
+            else -> return false
+        }
+        val rest = trimmed.substring(offset)
         val noFrag = rest.substringBefore('#')
         val authAndPath = noFrag.substringBefore('?')
-        val hasQuery = noFrag.contains('?')
-        if (hasQuery) return true
+        if (noFrag.contains('?')) return true
         val slashIdx = authAndPath.indexOf('/')
-        if (slashIdx >= 0) {
-            val pathPart = authAndPath.substring(slashIdx)
-            if (pathPart.length > 1) return true
-        }
+        if (slashIdx >= 0 && authAndPath.substring(slashIdx).length > 1) return true
         val authority = if (slashIdx >= 0) authAndPath.substring(0, slashIdx) else authAndPath
         val hostPort = if (authority.contains('@')) authority.substringAfterLast('@') else authority
         val hp = splitHostPort(hostPort) ?: return true
@@ -274,28 +275,68 @@ object UniversalConfig {
             if (host.isBlank() || host == "127.0.0.1" || host == "0.0.0.0" || port !in 1..65535) return
             val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
             val name = urlEncode((fields["name"] ?: "Clash-$type").trim('"', '\''))
-            val sni = fields["sni"] ?: fields["servername"] ?: ""
-            val pass = fields["password"] ?: fields["uuid"] ?: "dastyab"
+            val sni = fields["sni"] ?: fields["servername"] ?: fields["server-name"] ?: ""
+            val pass = fields["password"] ?: fields["auth-str"] ?: fields["auth"] ?: fields["uuid"] ?: "dastyab"
             val uuid = fields["uuid"] ?: fields["id"] ?: "11111111-1111-1111-1111-111111111111"
+            val user = fields["username"] ?: ""
             val network = fields["network"] ?: "tcp"
+            val tlsEnabled = fields["tls"]?.equals("true", ignoreCase = true) == true
+            val userAuth = if (user.isNotBlank() && fields["password"]?.isNotBlank() == true) {
+                "${urlEncode(user)}:${urlEncode(fields["password"]!!)}@"
+            } else if (user.isNotBlank()) {
+                "${urlEncode(user)}@"
+            } else {
+                ""
+            }
             val uri = when (type) {
                 "vless" -> "vless://${urlEncode(uuid)}@$h:$port?type=${urlEncode(network)}" +
                     (if (sni.isNotBlank()) "&sni=${urlEncode(sni)}" else "") + "#$name"
+                "vmess" -> {
+                    val aid = fields["alterid"] ?: fields["aid"] ?: "0"
+                    val net = urlEncode(network).replace("%20", "")
+                    val vmessJson = """{"v":"2","ps":"${jsonEscape(fields["name"] ?: "Clash-vmess")}","add":"${jsonEscape(host)}","port":"$port","id":"${jsonEscape(uuid)}","aid":"$aid","net":"$net","type":"none","tls":"${if (tlsEnabled) "tls" else ""}","sni":"${jsonEscape(sni)}"}"""
+                    "vmess://${encodeBase64UrlSafe(vmessJson)}"
+                }
                 "trojan" -> "trojan://${urlEncode(pass)}@$h:$port" +
                     (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
                 "hy2", "hysteria2" -> "hy2://${urlEncode(pass)}@$h:$port" +
                     (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
-                "hysteria" -> "hysteria://$h:$port" +
-                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "hysteria" -> {
+                    val auth = fields["auth-str"] ?: fields["auth"] ?: fields["password"] ?: ""
+                    val qp = buildList {
+                        if (sni.isNotBlank()) add("sni=${urlEncode(sni)}")
+                        if (auth.isNotBlank()) add("auth=${urlEncode(auth)}")
+                    }.joinToString("&")
+                    val q = if (qp.isNotEmpty()) "?$qp" else ""
+                    "hysteria://$h:$port$q#$name"
+                }
                 "tuic" -> "tuic://${urlEncode(uuid)}:${urlEncode(pass)}@$h:$port" +
                     (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "juicity" -> "juicity://${urlEncode(uuid)}:${urlEncode(pass)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "anytls" -> "anytls://${urlEncode(pass)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                "naive", "naive+https", "naive+quic" -> {
+                    val scheme = if (type == "naive+quic") "naive+quic" else "naive+https"
+                    "$scheme://$userAuth$h:$port" +
+                        (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$name"
+                }
                 "wireguard", "wg" -> "wireguard://${urlEncode(fields["private-key"] ?: pass)}@$h:$port" +
                     (if (!fields["public-key"].isNullOrBlank()) "?publickey=${urlEncode(fields["public-key"]!!)}" else "") + "#$name"
-                "socks5", "socks" -> "socks5://$h:$port#$name"
-                "http" -> "http://$h:$port#$name"
+                "socks5", "socks" -> "socks5://$userAuth$h:$port#$name"
+                "http" -> "${if (tlsEnabled) "https" else "http"}://$userAuth$h:$port#$name"
+                "https" -> "https://$userAuth$h:$port#$name"
                 "ss" -> {
                     val cipher = fields["cipher"] ?: "aes-256-gcm"
                     "ss://${urlEncode(cipher)}:${urlEncode(pass)}@$h:$port#$name"
+                }
+                "ssr" -> {
+                    val cipher = fields["cipher"] ?: "aes-256-cfb"
+                    val ssrProto = fields["protocol"] ?: "origin"
+                    val obfs = fields["obfs"] ?: "plain"
+                    val passB64 = encodeBase64UrlSafe(pass)
+                    val ssrRaw = "$host:$port:$ssrProto:$cipher:$obfs:$passB64"
+                    "ssr://${encodeBase64UrlSafe(ssrRaw)}#$name"
                 }
                 else -> null
             }
@@ -359,50 +400,446 @@ object UniversalConfig {
             return emptyList()
         }
         val out = LinkedHashSet<String>()
-        val objRegex = Regex("""\{[^{}]{16,1200}\}""")
-        for (m in objRegex.findAll(rawText)) {
-            val obj = m.value
-            val add = extractJsonString(obj, "add")
-            if (add != null && (extractJsonString(obj, "id") != null || extractJsonString(obj, "v") != null)) {
-                val port = extractJsonPort(obj, "port")
-                if (port != null && add != "127.0.0.1" && add != "0.0.0.0") {
-                    val vmessUri = "vmess://${encodeBase64UrlSafe(obj)}"
-                    if (parse(vmessUri) != null) out.add(vmessUri)
-                    continue
-                }
+        val objects = scanBalancedJsonObjects(rawText, maxObjects = 256)
+        for (objText in objects) {
+            val parsedVal = parseJsonValue(objText) as? Map<*, *>
+            if (parsedVal != null) {
+                extractFromParsedJsonObject(parsedVal, objText, out)
+            } else {
+                extractFallbackJsonObject(objText, out)
             }
-            val host = extractJsonString(obj, "server") ?: extractJsonString(obj, "address") ?: continue
-            val port = extractJsonPort(obj, "server_port") ?: extractJsonPort(obj, "port") ?: continue
-            if (host == "127.0.0.1" || host == "0.0.0.0") continue
-            val ctxStart = (m.range.first - 140).coerceAtLeast(0)
-            val ctxEnd = (m.range.last + 140).coerceAtMost(rawText.length)
-            val ctx = rawText.substring(ctxStart, ctxEnd).lowercase()
-            val objLower = obj.lowercase()
-            val scheme = when {
-                objLower.contains("\"wireguard\"") || objLower.contains("\"warp\"") || ctx.contains("\"wireguard\"") -> "wireguard"
-                objLower.contains("\"hysteria2\"") || ctx.contains("\"hysteria2\"") -> "hy2"
-                objLower.contains("\"vless\"") || ctx.contains("\"vless\"") -> "vless"
-                objLower.contains("\"trojan\"") || ctx.contains("\"trojan\"") -> "trojan"
-                objLower.contains("\"tuic\"") || ctx.contains("\"tuic\"") -> "tuic"
-                objLower.contains("\"shadowsocks\"") || ctx.contains("\"shadowsocks\"") -> "ss"
-                objLower.contains("\"socks\"") || ctx.contains("\"socks\"") -> "socks5"
-                objLower.contains("\"http\"") || ctx.contains("\"http\"") -> "http"
-                else -> "trojan"
-            }
-            val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
-            val idOrPass = extractJsonString(obj, "id")
-                ?: extractJsonString(obj, "uuid")
-                ?: extractJsonString(obj, "password")
-                ?: "dastyab"
-            val tag = urlEncode(extractJsonString(obj, "tag") ?: extractJsonString(obj, "ps") ?: "JSON-$scheme")
-            val uri = when (scheme) {
-                "wireguard", "socks5", "http" -> "$scheme://$h:$port#$tag"
-                "ss" -> "ss://aes-256-gcm:${urlEncode(idOrPass)}@$h:$port#$tag"
-                else -> "$scheme://${urlEncode(idOrPass)}@$h:$port#$tag"
-            }
-            if (parse(uri) != null) out.add(uri)
         }
         return out.toList()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun extractFromParsedJsonObject(
+        obj: Map<*, *>,
+        rawObjText: String,
+        out: LinkedHashSet<String>
+    ) {
+        val outbounds = obj["outbounds"] as? List<*>
+        if (outbounds != null) {
+            for (item in outbounds) {
+                if (item is Map<*, *>) {
+                    extractFromParsedJsonObject(item, "", out)
+                }
+            }
+        }
+
+        // Legacy VMess JSON: {"add":"...", "port": 443, "id":"..."}
+        val legacyAdd = jsonStr(obj["add"])
+        if (legacyAdd != null && (jsonStr(obj["id"]) != null || jsonStr(obj["v"]) != null)) {
+            val port = jsonPort(obj["port"])
+            if (port != null && legacyAdd != "127.0.0.1" && legacyAdd != "0.0.0.0") {
+                val serialized = rawObjText.takeIf { it.isNotBlank() && !it.contains("\"outbounds\"") }
+                    ?: buildString {
+                        append('{')
+                        append("\"v\":\"2\",")
+                        append("\"ps\":\"${jsonEscape(jsonStr(obj["ps"]) ?: "VMess")}\",")
+                        append("\"add\":\"${jsonEscape(legacyAdd)}\",")
+                        append("\"port\":\"$port\",")
+                        append("\"id\":\"${jsonEscape(jsonStr(obj["id"]).orEmpty())}\"")
+                        append('}')
+                    }
+                val vmessUri = "vmess://${encodeBase64UrlSafe(serialized)}"
+                if (parse(vmessUri) != null) out.add(vmessUri)
+                return
+            }
+        }
+
+        val protoType = (jsonStr(obj["type"]) ?: jsonStr(obj["protocol"]))?.lowercase()
+        if (protoType in setOf("direct", "block", "dns", "selector", "urltest", "freedom", "blackhole")) {
+            return
+        }
+
+        val tlsMap = obj["tls"] as? Map<*, *>
+        val streamMap = obj["streamSettings"] as? Map<*, *>
+        val tlsSettingsMap = streamMap?.get("tlsSettings") as? Map<*, *>
+        val transportMap = obj["transport"] as? Map<*, *>
+        val sni = jsonStr(obj["sni"])
+            ?: jsonStr(tlsMap?.get("server_name"))
+            ?: jsonStr(tlsSettingsMap?.get("serverName"))
+            ?: ""
+        val tlsEnabled = (tlsMap?.get("enabled") as? Boolean) == true ||
+            jsonStr(streamMap?.get("security"))?.equals("tls", ignoreCase = true) == true
+        val net = jsonStr(transportMap?.get("type"))
+            ?: jsonStr(streamMap?.get("network"))
+            ?: jsonStr(obj["network"])
+            ?: ""
+        val tagStr = jsonStr(obj["tag"]) ?: jsonStr(obj["ps"]) ?: jsonStr(obj["name"]) ?: "JSON-${protoType ?: "proxy"}"
+
+        // Nested Xray settings: vnext / servers / peers
+        val settingsMap = obj["settings"] as? Map<*, *>
+        val vnextList = settingsMap?.get("vnext") as? List<*>
+        if (vnextList != null) {
+            for (vItem in vnextList) {
+                val vMap = vItem as? Map<*, *> ?: continue
+                val addr = jsonStr(vMap["address"]) ?: continue
+                val port = jsonPort(vMap["port"]) ?: continue
+                if (addr == "127.0.0.1" || addr == "0.0.0.0") continue
+                val users = vMap["users"] as? List<*>
+                val firstUser = users?.firstOrNull() as? Map<*, *>
+                val uid = jsonStr(firstUser?.get("id")) ?: jsonStr(firstUser?.get("uuid")) ?: "11111111-1111-1111-1111-111111111111"
+                val scheme = if (protoType == "vmess") "vmess" else "vless"
+                buildJsonShareUri(scheme, addr, port, uid, "", "", sni, net, tagStr, tlsEnabled, emptyMap(), out)
+            }
+        }
+        val serversList = settingsMap?.get("servers") as? List<*>
+        if (serversList != null) {
+            for (sItem in serversList) {
+                val sMap = sItem as? Map<*, *> ?: continue
+                val addr = jsonStr(sMap["address"]) ?: jsonStr(sMap["server"]) ?: continue
+                val port = jsonPort(sMap["port"]) ?: jsonPort(sMap["server_port"]) ?: continue
+                if (addr == "127.0.0.1" || addr == "0.0.0.0") continue
+                val secret = jsonStr(sMap["password"]) ?: jsonStr(sMap["secret"]) ?: ""
+                val method = jsonStr(sMap["method"]) ?: ""
+                val scheme = protoType ?: "trojan"
+                buildJsonShareUri(scheme, addr, port, secret, "", method, sni, net, tagStr, tlsEnabled, sMap, out)
+            }
+        }
+
+        // Direct Sing-Box style outbound fields at current object level
+        val directHost = jsonStr(obj["server"]) ?: jsonStr(obj["address"]) ?: return
+        val directPort = jsonPort(obj["server_port"]) ?: jsonPort(obj["port"]) ?: return
+        if (directHost == "127.0.0.1" || directHost == "0.0.0.0") return
+        val effectiveType = protoType ?: inferSchemeFromJsonMap(obj)
+        val secret = jsonStr(obj["uuid"])
+            ?: jsonStr(obj["id"])
+            ?: jsonStr(obj["password"])
+            ?: jsonStr(obj["auth_str"])
+            ?: jsonStr(obj["auth"])
+            ?: jsonStr(obj["private_key"])
+            ?: ""
+        val user = jsonStr(obj["username"]) ?: ""
+        val method = jsonStr(obj["method"]) ?: jsonStr(obj["cipher"]) ?: ""
+        buildJsonShareUri(effectiveType, directHost, directPort, secret, user, method, sni, net, tagStr, tlsEnabled, obj, out)
+    }
+
+    private fun buildJsonShareUri(
+        rawType: String,
+        host: String,
+        port: Int,
+        secret: String,
+        username: String,
+        method: String,
+        sni: String,
+        network: String,
+        tag: String,
+        tlsEnabled: Boolean,
+        extra: Map<*, *>,
+        out: LinkedHashSet<String>
+    ) {
+        val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+        val frag = urlEncode(tag)
+        val tok = secret.ifBlank { "dastyab" }
+        val userAuth = when {
+            username.isNotBlank() && secret.isNotBlank() -> "${urlEncode(username)}:${urlEncode(secret)}@"
+            username.isNotBlank() -> "${urlEncode(username)}@"
+            secret.isNotBlank() -> "${urlEncode(secret)}@"
+            else -> ""
+        }
+        val uri = when (rawType.lowercase()) {
+            "vless" -> {
+                val qp = buildList {
+                    add("type=${urlEncode(network.ifBlank { "tcp" })}")
+                    if (sni.isNotBlank()) add("sni=${urlEncode(sni)}")
+                    if (tlsEnabled) add("security=tls")
+                }.joinToString("&")
+                "vless://${urlEncode(tok)}@$h:$port?$qp#$frag"
+            }
+            "vmess" -> {
+                val aid = jsonPort(extra["alter_id"])?.toString() ?: "0"
+                val net = network.ifBlank { "tcp" }
+                val vJson = """{"v":"2","ps":"${jsonEscape(tag)}","add":"${jsonEscape(host)}","port":"$port","id":"${jsonEscape(tok)}","aid":"$aid","net":"${jsonEscape(net)}","type":"none","tls":"${if (tlsEnabled) "tls" else ""}","sni":"${jsonEscape(sni)}"}"""
+                "vmess://${encodeBase64UrlSafe(vJson)}"
+            }
+            "trojan" -> "trojan://${urlEncode(tok)}@$h:$port" +
+                (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            "shadowsocks", "ss" -> {
+                val m = method.ifBlank { "aes-256-gcm" }
+                "ss://${urlEncode(m)}:${urlEncode(tok)}@$h:$port#$frag"
+            }
+            "shadowsocksr", "ssr" -> {
+                val m = method.ifBlank { "aes-256-cfb" }
+                val ssrProto = jsonStr(extra["protocol"]) ?: "origin"
+                val obfs = jsonStr(extra["obfs"]) ?: "plain"
+                val raw = "$host:$port:$ssrProto:$m:$obfs:${encodeBase64UrlSafe(tok)}"
+                "ssr://${encodeBase64UrlSafe(raw)}#$frag"
+            }
+            "hysteria2", "hy2" -> "hy2://${urlEncode(tok)}@$h:$port" +
+                (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            "hysteria" -> {
+                val qp = buildList {
+                    if (sni.isNotBlank()) add("sni=${urlEncode(sni)}")
+                    if (secret.isNotBlank()) add("auth=${urlEncode(secret)}")
+                }.joinToString("&")
+                "hysteria://$h:$port" + (if (qp.isNotEmpty()) "?$qp" else "") + "#$frag"
+            }
+            "tuic" -> {
+                val uid = jsonStr(extra["uuid"]) ?: tok
+                val pw = jsonStr(extra["password"]) ?: tok
+                "tuic://${urlEncode(uid)}:${urlEncode(pw)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            }
+            "juicity" -> {
+                val uid = jsonStr(extra["uuid"]) ?: tok
+                val pw = jsonStr(extra["password"]) ?: tok
+                "juicity://${urlEncode(uid)}:${urlEncode(pw)}@$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            }
+            "anytls" -> "anytls://${urlEncode(tok)}@$h:$port" +
+                (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            "naive", "naive+https", "naive+quic" -> {
+                val scheme = if (rawType.equals("naive+quic", true)) "naive+quic" else "naive+https"
+                "$scheme://$userAuth$h:$port" +
+                    (if (sni.isNotBlank()) "?sni=${urlEncode(sni)}" else "") + "#$frag"
+            }
+            "wireguard", "wg", "warp" -> {
+                val pk = jsonStr(extra["peer_public_key"]) ?: jsonStr(extra["public_key"]) ?: ""
+                val priv = jsonStr(extra["private_key"]) ?: secret
+                val auth = if (priv.isNotBlank()) "${urlEncode(priv)}@" else ""
+                val qp = if (pk.isNotBlank()) "?publickey=${urlEncode(pk)}" else ""
+                "wireguard://$auth$h:$port$qp#$frag"
+            }
+            "socks", "socks5" -> "socks5://$userAuth$h:$port#$frag"
+            "http" -> "${if (tlsEnabled) "https" else "http"}://$userAuth$h:$port#$frag"
+            "https" -> "https://$userAuth$h:$port#$frag"
+            else -> "trojan://${urlEncode(tok)}@$h:$port#$frag"
+        }
+        if (parse(uri) != null) out.add(uri)
+    }
+
+    private fun inferSchemeFromJsonMap(obj: Map<*, *>): String {
+        val text = obj.keys.joinToString(",") { it.toString().lowercase() }
+        return when {
+            "private_key" in text || "peer_public_key" in text -> "wireguard"
+            "auth_str" in text || "up_mbps" in text -> "hysteria"
+            "method" in text && "password" in text -> "ss"
+            "uuid" in text && "password" in text -> "tuic"
+            "uuid" in text -> "vless"
+            else -> "trojan"
+        }
+    }
+
+    private fun extractFallbackJsonObject(obj: String, out: LinkedHashSet<String>) {
+        val add = extractJsonString(obj, "add")
+        if (add != null && (extractJsonString(obj, "id") != null || extractJsonString(obj, "v") != null)) {
+            val port = extractJsonPort(obj, "port")
+            if (port != null && add != "127.0.0.1" && add != "0.0.0.0") {
+                val vmessUri = "vmess://${encodeBase64UrlSafe(obj)}"
+                if (parse(vmessUri) != null) out.add(vmessUri)
+                return
+            }
+        }
+        val host = extractJsonString(obj, "server") ?: extractJsonString(obj, "address") ?: return
+        val port = extractJsonPort(obj, "server_port") ?: extractJsonPort(obj, "port") ?: return
+        if (host == "127.0.0.1" || host == "0.0.0.0") return
+        val objLower = obj.lowercase()
+        val scheme = when {
+            objLower.contains("\"wireguard\"") || objLower.contains("\"warp\"") -> "wireguard"
+            objLower.contains("\"hysteria2\"") -> "hy2"
+            objLower.contains("\"hysteria\"") -> "hysteria"
+            objLower.contains("\"vless\"") -> "vless"
+            objLower.contains("\"trojan\"") -> "trojan"
+            objLower.contains("\"tuic\"") -> "tuic"
+            objLower.contains("\"juicity\"") -> "juicity"
+            objLower.contains("\"anytls\"") -> "anytls"
+            objLower.contains("\"naive\"") -> "naive+https"
+            objLower.contains("\"shadowsocks\"") -> "ss"
+            objLower.contains("\"socks\"") -> "socks5"
+            objLower.contains("\"https\"") -> "https"
+            objLower.contains("\"http\"") -> "http"
+            else -> "trojan"
+        }
+        val h = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+        val idOrPass = extractJsonString(obj, "id")
+            ?: extractJsonString(obj, "uuid")
+            ?: extractJsonString(obj, "password")
+            ?: "dastyab"
+        val tag = urlEncode(extractJsonString(obj, "tag") ?: extractJsonString(obj, "ps") ?: "JSON-$scheme")
+        val uri = when (scheme) {
+            "wireguard", "socks5", "http", "https" -> "$scheme://$h:$port#$tag"
+            "ss" -> "ss://aes-256-gcm:${urlEncode(idOrPass)}@$h:$port#$tag"
+            else -> "$scheme://${urlEncode(idOrPass)}@$h:$port#$tag"
+        }
+        if (parse(uri) != null) out.add(uri)
+    }
+
+    private fun scanBalancedJsonObjects(text: String, maxObjects: Int = 256): List<String> {
+        val result = ArrayList<String>()
+        var i = 0
+        val n = text.length
+        while (i < n && result.size < maxObjects) {
+            if (text[i] != '{') {
+                i++
+                continue
+            }
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var j = i
+            val limit = (i + 32768).coerceAtMost(n)
+            var matched = false
+            while (j < limit) {
+                val c = text[j]
+                if (inString) {
+                    if (escaped) {
+                        escaped = false
+                    } else if (c == '\\') {
+                        escaped = true
+                    } else if (c == '"') {
+                        inString = false
+                    }
+                } else {
+                    when (c) {
+                        '"' -> inString = true
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) {
+                                result.add(text.substring(i, j + 1))
+                                matched = true
+                                break
+                            }
+                        }
+                    }
+                }
+                j++
+            }
+            i = if (matched) j + 1 else i + 1
+        }
+        return result
+    }
+
+    private fun parseJsonValue(input: String): Any? {
+        var pos = 0
+        val len = input.length
+
+        fun skipWs() {
+            while (pos < len && input[pos].isWhitespace()) pos++
+        }
+
+        fun parseString(): String? {
+            if (pos >= len || input[pos] != '"') return null
+            pos++
+            val sb = StringBuilder()
+            while (pos < len) {
+                val c = input[pos++]
+                when (c) {
+                    '"' -> return sb.toString()
+                    '\\' -> {
+                        if (pos >= len) return null
+                        when (val esc = input[pos++]) {
+                            '"', '\\', '/' -> sb.append(esc)
+                            'b' -> sb.append('\b')
+                            'f' -> sb.append('\u000C')
+                            'n' -> sb.append('\n')
+                            'r' -> sb.append('\r')
+                            't' -> sb.append('\t')
+                            'u' -> {
+                                if (pos + 4 <= len) {
+                                    val code = input.substring(pos, pos + 4).toIntOrNull(16)
+                                    if (code != null) sb.append(code.toChar())
+                                    pos += 4
+                                }
+                            }
+                            else -> sb.append(esc)
+                        }
+                    }
+                    else -> sb.append(c)
+                }
+            }
+            return null
+        }
+
+        fun parseValue(): Any? {
+            skipWs()
+            if (pos >= len) return null
+            return when (input[pos]) {
+                '{' -> {
+                    pos++
+                    val map = LinkedHashMap<String, Any?>()
+                    skipWs()
+                    if (pos < len && input[pos] == '}') {
+                        pos++
+                        return map
+                    }
+                    while (pos < len) {
+                        skipWs()
+                        val key = parseString() ?: return null
+                        skipWs()
+                        if (pos >= len || input[pos] != ':') return null
+                        pos++
+                        val value = parseValue()
+                        map[key] = value
+                        skipWs()
+                        if (pos < len && input[pos] == ',') {
+                            pos++
+                            continue
+                        }
+                        if (pos < len && input[pos] == '}') {
+                            pos++
+                            return map
+                        }
+                        return null
+                    }
+                    null
+                }
+                '[' -> {
+                    pos++
+                    val list = ArrayList<Any?>()
+                    skipWs()
+                    if (pos < len && input[pos] == ']') {
+                        pos++
+                        return list
+                    }
+                    while (pos < len) {
+                        list.add(parseValue())
+                        skipWs()
+                        if (pos < len && input[pos] == ',') {
+                            pos++
+                            continue
+                        }
+                        if (pos < len && input[pos] == ']') {
+                            pos++
+                            return list
+                        }
+                        return null
+                    }
+                    null
+                }
+                '"' -> parseString()
+                't' -> if (input.startsWith("true", pos)) { pos += 4; true } else null
+                'f' -> if (input.startsWith("false", pos)) { pos += 5; false } else null
+                'n' -> if (input.startsWith("null", pos)) { pos += 4; null } else null
+                else -> {
+                    val start = pos
+                    while (pos < len && (input[pos].isDigit() || input[pos] in "-+.eE")) pos++
+                    if (pos == start) return null
+                    val numStr = input.substring(start, pos)
+                    numStr.toLongOrNull() ?: numStr.toDoubleOrNull() ?: numStr
+                }
+            }
+        }
+
+        return parseValue()
+    }
+
+    private fun jsonStr(value: Any?): String? = when (value) {
+        is String -> value.trim().takeIf { it.isNotEmpty() }
+        is Number -> value.toString()
+        else -> null
+    }
+
+    private fun jsonPort(value: Any?): Int? = when (value) {
+        is Number -> value.toInt().takeIf { it in 1..65535 }
+        is String -> value.trim().toIntOrNull()?.takeIf { it in 1..65535 }
+        else -> null
+    }
+
+    private fun jsonEscape(value: String): String {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
     }
 
     /** Converts an `openvpn://` / `ovpn://` URI back into a minimal client `.ovpn` profile. */
@@ -600,8 +1037,39 @@ object UniversalConfig {
         "openvpn", "ovpn" -> Family.OPENVPN
         "npv", "npv4", "npvs", "npvt", "napsternetv" -> Family.NAPSTERNETV
         "mtproto" -> Family.TELEGRAM_MTPROTO
-        "socks", "socks4", "socks5", "http", "ssh", "sn", "dnstt", "slipnet" -> Family.PROXY_TUNNEL
+        "socks", "socks4", "socks5", "http", "https", "ssh", "sn", "dnstt", "slipnet" -> Family.PROXY_TUNNEL
         else -> Family.XRAY_SINGBOX
+    }
+
+    /** Canonicalizes protocol aliases (`hy2`->`hysteria2`, `wg`->`wireguard`, `socks`->`socks5`, `ovpn`->`openvpn`). */
+    fun canonicalProtocol(protocol: String): String = when (protocol.trim().lowercase()) {
+        "hy2" -> "hysteria2"
+        "wg" -> "wireguard"
+        "socks" -> "socks5"
+        "ovpn" -> "openvpn"
+        else -> protocol.trim().lowercase()
+    }
+
+    /** Normalizes a share link (trimmed, HTML-unescaped, normalized host casing) for dedup and storage. */
+    fun normalizeUri(raw: String): String = unescapeHtml(raw).trim()
+
+    /** Computes canonical deduplication key `protocol:host:port:id`. */
+    fun dedupKey(raw: String): String {
+        val ep = parse(raw) ?: return normalizeUri(raw)
+        return "${canonicalProtocol(ep.protocol)}:${ep.host.lowercase()}:${ep.port}:${ep.id}"
+    }
+
+    /** Deduplicates parsed/raw configs by `protocol+host+port+id`, preserving first-seen order. */
+    fun deduplicate(configs: Collection<String>): List<String> {
+        if (configs.isEmpty()) return emptyList()
+        val seen = LinkedHashMap<String, String>(configs.size)
+        for (raw in configs) {
+            val clean = normalizeUri(raw)
+            if (clean.isEmpty()) continue
+            val key = dedupKey(clean)
+            seen.putIfAbsent(key, clean)
+        }
+        return seen.values.toList()
     }
 
     fun isWireGuardUri(uri: String): Boolean {
@@ -638,12 +1106,12 @@ object UniversalConfig {
         val proto = protocolOf(trimmed)
         if (proto !in SUPPORTED_PROTOCOLS) return null
 
-        if (proto == "http" && isNonProxyHttpUrl(trimmed)) return null
+        if (proto in setOf("http", "https") && isNonProxyHttpUrl(trimmed)) return null
 
         // VLESS
         if (proto == "vless") {
             val vless = TunnelConfig.parseVlessUri(trimmed) ?: return null
-            return ParsedEndpoint(trimmed, "vless", Family.XRAY_SINGBOX, vless.host, vless.port, vless.label)
+            return ParsedEndpoint(trimmed, "vless", Family.XRAY_SINGBOX, vless.host, vless.port, vless.label, vless.uuid)
         }
 
         // Telegram MTProto proxy links
@@ -656,7 +1124,8 @@ object UniversalConfig {
                 Regex("^https?://(?:t\\.me|telegram\\.me)/socks\\?", RegexOption.IGNORE_CASE).containsMatchIn(trimmed))
         ) {
             val hop = TunnelConfig.parseProxyHop(trimmed) ?: return null
-            return ParsedEndpoint(trimmed, "socks5", Family.PROXY_TUNNEL, hop.host, hop.port, "Telegram SOCKS5")
+            val id = if (hop.username.isNotBlank() || hop.password.isNotBlank()) "${hop.username}:${hop.password}" else "${hop.host}:${hop.port}"
+            return ParsedEndpoint(trimmed, "socks5", Family.PROXY_TUNNEL, hop.host, hop.port, "Telegram SOCKS5", id)
         }
 
         // VMess Base64(JSON)
@@ -666,7 +1135,8 @@ object UniversalConfig {
             val host = extractJsonString(json, "add") ?: extractJsonString(json, "host") ?: return null
             val port = extractJsonPort(json, "port") ?: return null
             val label = extractJsonString(json, "ps").orEmpty()
-            return ParsedEndpoint(trimmed, "vmess", Family.XRAY_SINGBOX, host, port, label)
+            val id = extractJsonString(json, "id").orEmpty()
+            return ParsedEndpoint(trimmed, "vmess", Family.XRAY_SINGBOX, host, port, label, id)
         }
 
         // SSR Base64(host:port:proto:method:obfs:pass/...)
@@ -680,22 +1150,29 @@ object UniversalConfig {
                     if (parts[0].isNotBlank() && p != null && p in 1..65535) parts[0] to p else null
                 } ?: return null
             val label = trimmed.substringAfter('#', "").let { decodePercent(it) }
-            return ParsedEndpoint(trimmed, "ssr", Family.XRAY_SINGBOX, host, port, label)
+            val parts = head.split(':')
+            val id = parts.getOrNull(5)?.trim().orEmpty()
+            return ParsedEndpoint(trimmed, "ssr", Family.XRAY_SINGBOX, host, port, label, id)
         }
 
         // Shadowsocks (plain, SIP002, or whole-URI Base64)
         if (proto == "ss") {
             val noFrag = trimmed.substringAfter("://").substringBefore('#')
             val label = trimmed.substringAfter('#', "").let { decodePercent(it) }
+            var id = ""
             val hostPortPair = if (noFrag.contains('@')) {
+                val rawUser = noFrag.substringBefore('@')
+                val decodedUser = tryDecodeBase64(rawUser) ?: decodePercent(rawUser)
+                id = decodedUser
                 splitHostPort(noFrag.substringAfter('@').substringBefore('?').substringBefore('/'))
             } else {
                 val b64 = noFrag.substringBefore('?')
                 val decoded = tryDecodeBase64(b64) ?: return null
                 if (!decoded.contains('@')) return null
+                id = decoded.substringBefore('@')
                 splitHostPort(decoded.substringAfter('@').substringBefore('?').substringBefore('/'))
             } ?: return null
-            return ParsedEndpoint(trimmed, "ss", Family.XRAY_SINGBOX, hostPortPair.first, hostPortPair.second, label)
+            return ParsedEndpoint(trimmed, "ss", Family.XRAY_SINGBOX, hostPortPair.first, hostPortPair.second, label, id)
         }
 
         // NapsternetV (`npv://`, `npv4://`, `npvs://`, `npvt://`, `napsternetv://`)
@@ -704,6 +1181,7 @@ object UniversalConfig {
             val body = trimmed.substringAfter("://").substringBefore('#')
             val authoritySegment = body.substringBefore('?').substringBefore('/')
             if (authoritySegment.contains('@') || authoritySegment.contains(':')) {
+                val userPart = if (authoritySegment.contains('@')) decodePercent(authoritySegment.substringBefore('@')) else ""
                 val hostPortPart = if (authoritySegment.contains('@')) {
                     authoritySegment.substringAfterLast('@')
                 } else {
@@ -711,7 +1189,7 @@ object UniversalConfig {
                 }
                 val direct = splitHostPort(hostPortPart)
                 if (direct != null) {
-                    return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, direct.first, direct.second, label)
+                    return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, direct.first, direct.second, label, userPart)
                 }
             }
             val decoded = tryDecodeBase64(body.substringBefore('?'))
@@ -720,7 +1198,7 @@ object UniversalConfig {
                 if (decoded.contains("://")) {
                     val inner = parse(decoded)
                     if (inner != null) {
-                        return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, inner.host, inner.port, inner.label.ifBlank { label })
+                        return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, inner.host, inner.port, inner.label.ifBlank { label }, inner.id)
                     }
                 }
                 val host = extractJsonString(decoded, "add")
@@ -737,7 +1215,8 @@ object UniversalConfig {
                         ?: extractJsonString(decoded, "name")
                         ?: extractJsonString(decoded, "tag")
                         ?: label
-                    return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, host, port, ps)
+                    val id = extractJsonString(decoded, "id") ?: extractJsonString(decoded, "uuid") ?: ""
+                    return ParsedEndpoint(trimmed, proto, Family.NAPSTERNETV, host, port, ps, id)
                 }
             }
             val authorityHostPort = parseAuthorityHostPort(trimmed)
@@ -747,10 +1226,22 @@ object UniversalConfig {
             return null
         }
 
-        // Standard authority URIs (trojan, hy2, hysteria2, hysteria, tuic, juicity, anytls, naive+*, wireguard, wg, warp, openvpn, ovpn, socks*, ssh, sn, dnstt, slipnet)
+        // Standard authority URIs (trojan, hy2, hysteria2, hysteria, tuic, juicity, anytls, naive+*, wireguard, wg, warp, openvpn, ovpn, socks*, http, https, ssh, sn, dnstt, slipnet)
         val hp = parseAuthorityHostPort(trimmed) ?: return null
         val label = trimmed.substringAfter('#', "").let { decodePercent(it) }
-        return ParsedEndpoint(trimmed, proto, familyOf(proto), hp.first, hp.second, label)
+        val userInfo = trimmed.substringAfter("://")
+            .substringBefore('#')
+            .substringBefore('?')
+            .substringBefore('/')
+            .let { if (it.contains('@')) decodePercent(it.substringBeforeLast('@')) else "" }
+        val queryParams = parseQueryParams(trimmed.substringAfter('?', "").substringBefore('#'))
+        val id = when {
+            userInfo.isNotEmpty() -> userInfo
+            proto == "hysteria" -> queryParams["auth"] ?: queryParams["auth_str"] ?: ""
+            proto in setOf("wireguard", "wg", "warp", "amneziawg") -> queryParams["privatekey"] ?: ""
+            else -> ""
+        }
+        return ParsedEndpoint(trimmed, proto, familyOf(proto), hp.first, hp.second, label, id)
     }
 
     fun extractHostAndPort(raw: String): Pair<String, Int>? {
@@ -773,7 +1264,7 @@ object UniversalConfig {
         "ss", "ssr" -> 7
         "npv4", "npvs", "npvt", "npv", "napsternetv" -> 8
         "juicity", "anytls", "naive+https", "naive+quic", "naive" -> 9
-        "socks5", "socks", "socks4", "http", "ssh", "sn", "dnstt", "slipnet" -> 10
+        "socks5", "socks", "socks4", "http", "https", "ssh", "sn", "dnstt", "slipnet" -> 10
         "mtproto" -> 11
         else -> 15
     }
@@ -784,7 +1275,8 @@ object UniversalConfig {
      */
     fun mergeBalanced(configs: Collection<String>, limit: Int = 4096): List<String> {
         if (configs.isEmpty()) return emptyList()
-        val grouped = configs.distinct().groupBy { protocolOf(it) }
+        val deduped = deduplicate(configs)
+        val grouped = deduped.groupBy { canonicalProtocol(protocolOf(it)) }
         val result = LinkedHashSet<String>()
 
         // Round 1: guarantee representation from every harvested protocol in priority order
@@ -1048,7 +1540,7 @@ object UniversalConfig {
         val label = rawQuery.substringAfter('#', "")
             .let { decodePercent(it).trim() }
             .ifBlank { "Telegram MTProto" }
-        return ParsedEndpoint(trimmed, "mtproto", Family.TELEGRAM_MTPROTO, host, validPort, label)
+        return ParsedEndpoint(trimmed, "mtproto", Family.TELEGRAM_MTPROTO, host, validPort, label, secret)
     }
 
     private fun parseQueryParams(query: String): Map<String, String> {

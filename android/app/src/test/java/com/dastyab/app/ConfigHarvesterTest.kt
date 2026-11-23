@@ -130,4 +130,44 @@ class ConfigHarvesterTest {
         assertTrue("WireGuard" in names)
         assertTrue("NapsternetV" in names)
     }
+
+    @Test
+    fun mirrorUrlsAndTelegramPagination_extractCursorsAndMirrorsCorrectly() {
+        val raw = "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_Sub.txt"
+        val mirrors = ConfigHarvester.toMirrorUrls(raw)
+        assertEquals(3, mirrors.size)
+        assertEquals(raw, mirrors[0])
+        assertEquals("https://cdn.jsdelivr.net/gh/barry-far/V2ray-Configs@main/All_Configs_Sub.txt", mirrors[1])
+        assertEquals("https://cdn.statically.io/gh/barry-far/V2ray-Configs/main/All_Configs_Sub.txt", mirrors[2])
+
+        val html = """
+            <div data-post="whitedns/5120">msg1</div>
+            <div data-post="whitedns/5112">msg2</div>
+            <div data-post="otherchan/100">ignore</div>
+        """.trimIndent()
+        assertEquals(5112L, ConfigHarvester.extractMinTelegramPostId(html, "whitedns"))
+    }
+
+    @Test
+    fun filterByProtocol_andBase64Export_deduplicatesAndFiltersCleanly() {
+        val raw = listOf(
+            "vless://11111111-1111-1111-1111-111111111111@a.example.com:443#V1",
+            "hy2://pw@b.example.com:8443#H1",
+            "hysteria2://pw@b.example.com:8443#H1-dupe",
+            "naive+https://u:p@c.example.com:443#N1",
+            "http://d.example.com:8080#HTTP1",
+            "https://e.example.com:8443#HTTPS1"
+        )
+        val hyOnly = ConfigHarvester.filterByProtocol(raw, "hysteria2")
+        assertEquals(1, hyOnly.size)
+        assertEquals("hy2://pw@b.example.com:8443#H1", hyOnly[0])
+
+        val httpBoth = ConfigHarvester.filterByProtocol(raw, "http/https")
+        assertEquals(2, httpBoth.size)
+
+        val sub = ConfigHarvester.toBase64Subscription(httpBoth)
+        assertTrue(sub.isNotBlank())
+        val roundTripped = UniversalConfig.extractAll(sub)
+        assertEquals(2, roundTripped.size)
+    }
 }

@@ -146,7 +146,7 @@ fn link_uses_tls(url: &str) -> bool {
 /// lightweight "does this endpoint actually speak TLS?" oracle, so probes
 /// reject silent-TCP blackholes and non-TLS servers instead of reporting
 /// false confidence.
-fn build_client_hello(sni: &str) -> Vec<u8> {
+pub(crate) fn build_client_hello(sni: &str) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&[0x03, 0x03]); // ClientVersion: TLS 1.2
                                            // Random (32 bytes): timestamp-prefixed, deterministic filler.

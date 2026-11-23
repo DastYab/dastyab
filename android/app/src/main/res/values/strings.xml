@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Dastyab</string>
     <string name="status_checking">Checking binary…</string>
     <string name="status_downloading">Downloading dastyab binary…</string>
@@ -915,4 +915,65 @@
     <string name="browser_tool_open_chrome">Open Current Page in Chrome</string>
     <string name="browser_tool_copy_url">Copy Current URL</string>
     <string name="browser_tool_clear_profile">Sign Out / Clear Current Profile Session</string>
+
+    <!-- Source Manager & Unified Harvester -->
+    <string name="source_mgr_title" tools:ignore="MissingTranslation">Source Manager &amp; Harvester</string>
+    <string name="source_mgr_subtitle" tools:ignore="MissingTranslation">Manage GitHub raw feeds, Subscription URLs, Telegram channels &amp; posts, then harvest, test latency &amp; export.</string>
+    <string name="source_mgr_harvest_card_title" tools:ignore="MissingTranslation">Unified Harvest &amp; Latency Test</string>
+    <string name="source_mgr_protocol_label" tools:ignore="MissingTranslation">Protocol Filter:</string>
+    <string name="source_mgr_btn_harvest" tools:ignore="MissingTranslation">Harvest Enabled Sources</string>
+    <string name="source_mgr_btn_test_latency" tools:ignore="MissingTranslation">Test TCP / TLS Latency</string>
+    <string name="source_mgr_status_idle" tools:ignore="MissingTranslation">Ready · %1$d cached config(s) · %2$d/%3$d sources enabled</string>
+    <string name="source_mgr_status_harvesting" tools:ignore="MissingTranslation">Harvesting enabled sources concurrently…</string>
+    <string name="source_mgr_status_harvest_done" tools:ignore="MissingTranslation">Harvested %1$d unique config(s) from %2$d/%3$d sources</string>
+    <string name="source_mgr_status_testing" tools:ignore="MissingTranslation">Probing TCP / TLS latency for top %1$d config(s)…</string>
+    <string name="source_mgr_status_tested" tools:ignore="MissingTranslation">Kept %1$d reachable config(s) sorted fastest-first</string>
+    <string name="source_mgr_export_label" tools:ignore="MissingTranslation">One-Tap Export &amp; Client Share</string>
+    <string name="source_mgr_btn_copy_all" tools:ignore="MissingTranslation">Copy All</string>
+    <string name="source_mgr_btn_copy_sub" tools:ignore="MissingTranslation">Sub (Base64)</string>
+    <string name="source_mgr_btn_qr" tools:ignore="MissingTranslation">QR Code</string>
+    <string name="source_mgr_btn_share_v2rayng" tools:ignore="MissingTranslation">v2rayNG</string>
+    <string name="source_mgr_btn_share_hiddify" tools:ignore="MissingTranslation">Hiddify</string>
+    <string name="source_mgr_btn_share_nekobox" tools:ignore="MissingTranslation">NekoBox</string>
+    <string name="source_mgr_copied_for_client" tools:ignore="MissingTranslation">Copied configs to clipboard — paste or import in %1$s</string>
+    <string name="source_mgr_no_configs" tools:ignore="MissingTranslation">No configs ready yet — tap Harvest Enabled Sources first.</string>
+    <string name="source_mgr_exported_count" tools:ignore="MissingTranslation">Copied %1$d config(s) to clipboard!</string>
+    <string name="source_mgr_exported_sub" tools:ignore="MissingTranslation">Copied Base64 subscription (%1$d configs)!</string>
+    <string name="source_mgr_qr_title" tools:ignore="MissingTranslation">Harvested Subscription QR</string>
+    <string name="source_mgr_sources_card_title" tools:ignore="MissingTranslation">Unified Sources</string>
+    <string name="source_mgr_filter_all" tools:ignore="MissingTranslation">All</string>
+    <string name="source_mgr_filter_github" tools:ignore="MissingTranslation">GitHub</string>
+    <string name="source_mgr_filter_sub" tools:ignore="MissingTranslation">Sub URL</string>
+    <string name="source_mgr_filter_tg_chan" tools:ignore="MissingTranslation">TG Channel</string>
+    <string name="source_mgr_filter_tg_post" tools:ignore="MissingTranslation">TG Post</string>
+    <string name="source_mgr_summary_fmt" tools:ignore="MissingTranslation">%1$d shown · %2$d enabled of %3$d total</string>
+    <string name="source_mgr_btn_add" tools:ignore="MissingTranslation">+ Add Source</string>
+    <string name="source_mgr_btn_bulk" tools:ignore="MissingTranslation">Bulk Paste</string>
+    <string name="source_mgr_btn_import" tools:ignore="MissingTranslation">Import</string>
+    <string name="source_mgr_btn_export" tools:ignore="MissingTranslation">Export</string>
+    <string name="source_mgr_btn_edit" tools:ignore="MissingTranslation">Edit</string>
+    <string name="source_mgr_btn_remove" tools:ignore="MissingTranslation">Remove</string>
+    <string name="source_mgr_stats_fmt" tools:ignore="MissingTranslation">Configs: %1$d · Success: %2$d%% (%3$d/%4$d) · Last: %5$s</string>
+    <string name="source_mgr_never_fetched" tools:ignore="MissingTranslation">Never</string>
+    <string name="source_mgr_add_title" tools:ignore="MissingTranslation">Add Source</string>
+    <string name="source_mgr_edit_title" tools:ignore="MissingTranslation">Edit Source</string>
+    <string name="source_mgr_hint_name" tools:ignore="MissingTranslation">Source label (optional)</string>
+    <string name="source_mgr_hint_value" tools:ignore="MissingTranslation">URL, @channel, or t.me/channel/123</string>
+    <string name="source_mgr_enabled_label" tools:ignore="MissingTranslation">Enabled</string>
+    <string name="source_mgr_invalid_source" tools:ignore="MissingTranslation">Invalid URL, Telegram channel, or post link</string>
+    <string name="source_mgr_saved_toast" tools:ignore="MissingTranslation">Source saved!</string>
+    <string name="source_mgr_removed_toast" tools:ignore="MissingTranslation">Source removed</string>
+    <string name="source_mgr_bulk_title" tools:ignore="MissingTranslation">Bulk Add Sources</string>
+    <string name="source_mgr_bulk_hint" tools:ignore="MissingTranslation">Paste GitHub raw/blob URLs, subscription URLs, @channels, or t.me/ch/post lines</string>
+    <string name="source_mgr_bulk_added" tools:ignore="MissingTranslation">Added %1$d source(s)</string>
+    <string name="source_mgr_import_title" tools:ignore="MissingTranslation">Import Sources (JSON or Text)</string>
+    <string name="source_mgr_import_hint" tools:ignore="MissingTranslation">Paste exported JSON array or lines</string>
+    <string name="source_mgr_import_replace" tools:ignore="MissingTranslation">Replace existing source list</string>
+    <string name="source_mgr_imported_toast" tools:ignore="MissingTranslation">Imported %1$d source(s)</string>
+    <string name="source_mgr_export_title" tools:ignore="MissingTranslation">Export Source List</string>
+    <string name="source_mgr_export_json" tools:ignore="MissingTranslation">Copy JSON</string>
+    <string name="source_mgr_export_text" tools:ignore="MissingTranslation">Copy Text</string>
+    <string name="source_mgr_reset_confirm_title" tools:ignore="MissingTranslation">Reset Sources to Defaults?</string>
+    <string name="source_mgr_reset_confirm_msg" tools:ignore="MissingTranslation">Restore built-in GitHub aggregators and Telegram channels?</string>
+    <string name="rescue_btn_manage_sources" tools:ignore="MissingTranslation">Manage Unified Sources</string>
 </resources>

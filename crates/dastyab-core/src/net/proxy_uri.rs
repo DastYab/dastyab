@@ -48,9 +48,14 @@ pub const SUPPORTED_SCHEMES: &[&str] = &[
     "napsternetv",
     "juicity",
     "anytls",
+    "naive+https",
+    "naive+quic",
+    "naive",
     "socks5",
     "socks4",
     "socks",
+    "http",
+    "https",
     "ssh",
     "sn",
     "dnstt",
@@ -95,14 +100,15 @@ impl ProxyUri {
             raw: raw.to_string(),
         };
         let ok = match scheme.as_str() {
-            "vless" | "trojan" | "hysteria2" | "hysteria" | "hy2" | "juicity" | "anytls"
-            | "ssh" => parse_userinfo_host(&mut out, rest, 1),
+            "vless" | "trojan" | "hysteria2" | "hy2" | "juicity" | "anytls" | "ssh" => {
+                parse_userinfo_host(&mut out, rest, 1)
+            }
+            "hysteria" => parse_hysteria_v1(&mut out, rest),
             "tuic" => parse_userinfo_host(&mut out, rest, 2),
             "wireguard" | "wg" | "warp" | "amneziawg" | "openvpn" | "ovpn" | "socks5"
-            | "socks4" | "socks" | "sn" | "dnstt" | "slipnet" => {
-                parse_optional_userinfo_host(&mut out, rest)
-            }
-            "http" => parse_explicit_http_proxy(&mut out, raw),
+            | "socks4" | "socks" | "naive+https" | "naive+quic" | "naive" | "sn" | "dnstt"
+            | "slipnet" => parse_optional_userinfo_host(&mut out, rest),
+            "http" | "https" => parse_explicit_http_proxy(&mut out, raw),
             "npv" | "npv4" | "napsternetv" => parse_napsternet(&mut out, rest),
             "ss" => parse_ss(&mut out, rest),
             "vmess" => parse_vmess(&mut out, rest),
@@ -120,13 +126,64 @@ impl ProxyUri {
         }
         Some(out)
     }
+
+    /// Return the canonical lowercase scheme name (e.g. `hy2` -> `hysteria2`,
+    /// `wg` -> `wireguard`, `socks` -> `socks5`).
+    pub fn canonical_scheme(&self) -> &str {
+        match self.scheme.as_str() {
+            "hy2" => "hysteria2",
+            "wg" => "wireguard",
+            "socks" => "socks5",
+            "ovpn" => "openvpn",
+            other => other,
+        }
+    }
+
+    /// Deduplication key using `protocol+host+port+id` (canonical scheme and
+    /// lowercased host).
+    pub fn dedup_key(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.canonical_scheme(),
+            self.host.to_ascii_lowercase(),
+            self.port,
+            self.id
+        )
+    }
+}
+
+/// Deduplicate share-links by `protocol+host+port+id` (canonical scheme),
+/// preserving original order and raw strings.
+pub fn deduplicate_links(links: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(links.len());
+    for link in links {
+        let trimmed = link.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = ProxyUri::parse(trimmed)
+            .map(|u| u.dedup_key())
+            .unwrap_or_else(|| trimmed.to_string());
+        if seen.insert(key) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
 }
 
 /// Split `scheme://...` into `(scheme, rest_after_://)`.
 fn split_scheme(raw: &str) -> Option<(&str, &str)> {
     let idx = raw.find("://")?;
     let scheme = &raw[..idx];
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
+    let valid = scheme.chars().enumerate().all(|(i, c)| {
+        if i == 0 {
+            c.is_ascii_alphabetic()
+        } else {
+            c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+        }
+    });
+    if scheme.is_empty() || !valid {
         return None;
     }
     Some((scheme, &raw[idx + 3..]))
@@ -171,7 +228,8 @@ fn set_host_port(out: &mut ProxyUri, host_port: &str) -> bool {
 /// `userinfo` to cut the id (1 keeps the whole userinfo; 2 strips a
 /// trailing `:token` — used by `tuic://uuid:token@...`).
 fn parse_userinfo_host(out: &mut ProxyUri, rest: &str, split_at: usize) -> bool {
-    let (userinfo, host_part) = match rest.split_once('@') {
+    let auth_part = rest.split(['?', '#']).next().unwrap_or(rest);
+    let (userinfo, host_part) = match auth_part.split_once('@') {
         Some(x) => x,
         None => return false,
     };
@@ -193,10 +251,38 @@ fn parse_userinfo_host(out: &mut ProxyUri, rest: &str, split_at: usize) -> bool 
     true
 }
 
+/// Hysteria v1 supports `hysteria://auth@host:port?...` or
+/// `hysteria://host:port?auth=token&...`.
+fn parse_hysteria_v1(out: &mut ProxyUri, rest: &str) -> bool {
+    let auth_part = rest.split(['?', '#']).next().unwrap_or(rest);
+    if auth_part.contains('@') {
+        return parse_userinfo_host(out, rest, 1);
+    }
+    if !set_host_port(out, rest) {
+        return false;
+    }
+    let query = rest
+        .split_once('?')
+        .map(|(_, q)| q.split('#').next().unwrap_or(q))
+        .unwrap_or("");
+    let auth = query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        if k.eq_ignore_ascii_case("auth") {
+            let dec = crate::artifact::vless::decode_query(v);
+            (!dec.is_empty()).then_some(dec)
+        } else {
+            None
+        }
+    });
+    out.id = auth.unwrap_or_else(|| format!("{}:{}", out.host, out.port));
+    true
+}
+
 /// For schemes where userinfo before `@` is optional
-/// (`wireguard`, `wg`, `warp`, `socks5`, `sn`, `dnstt`).
+/// (`wireguard`, `wg`, `warp`, `socks5`, `naive+https`, `sn`, `dnstt`).
 fn parse_optional_userinfo_host(out: &mut ProxyUri, rest: &str) -> bool {
-    if rest.contains('@') {
+    let auth_part = rest.split(['?', '#']).next().unwrap_or(rest);
+    if auth_part.contains('@') {
         return parse_userinfo_host(out, rest, 1);
     }
     if !set_host_port(out, rest) {
@@ -1015,5 +1101,59 @@ mod tests {
 
         let ss_no_colon = base64::engine::general_purpose::STANDARD.encode("nocolon@1.2.3.4:8388");
         assert!(ProxyUri::parse(&format!("ss://{ss_no_colon}")).is_none());
+    }
+
+    #[test]
+    fn parses_all_required_share_link_schemes_and_deduplicates() {
+        let vmess_b64 = base64::engine::general_purpose::STANDARD
+            .encode(r#"{"v":"2","ps":"vm","add":"203.0.113.2","port":"443","id":"vm-id"}"#);
+        let ssr_b64 = base64::engine::general_purpose::STANDARD
+            .encode("203.0.113.5:8388:origin:aes-256-cfb:plain:cGFzcw");
+        let ss_b64 = base64::engine::general_purpose::STANDARD.encode("aes-256-gcm:sspass");
+
+        let cases = [
+            ("vless", "vless://uuid-1@203.0.113.1:443?security=tls#v"),
+            ("vmess", &format!("vmess://{vmess_b64}")),
+            ("trojan", "trojan://pass1@203.0.113.3:443#t"),
+            ("ss", &format!("ss://{ss_b64}@203.0.113.4:8388#s")),
+            ("ssr", &format!("ssr://{ssr_b64}")),
+            (
+                "hysteria",
+                "hysteria://203.0.113.6:443?auth=hy1tok&upmbps=20#hy1",
+            ),
+            ("hysteria2", "hysteria2://hy2tok@203.0.113.7:443#hy2"),
+            ("hy2", "hy2://hy2tok@203.0.113.8:443#hy2b"),
+            ("tuic", "tuic://tuic-u:tok@203.0.113.9:443#tuic"),
+            (
+                "wireguard",
+                "wireguard://priv1=@203.0.113.10:51820?publickey=pub#wg",
+            ),
+            ("wg", "wg://priv2=@203.0.113.11:51820?publickey=pub#wg2"),
+            ("socks", "socks://203.0.113.12:1080#s4"),
+            ("socks5", "socks5://u:p@203.0.113.13:1080#s5"),
+            ("http", "http://u:p@203.0.113.14:8080#hp"),
+            ("https", "https://u:p@203.0.113.15:8443#hps"),
+            (
+                "naive+https",
+                "naive+https://user:pw@203.0.113.16:443#naive",
+            ),
+            ("juicity", "juicity://ju-id:pw@203.0.113.17:443#jc"),
+            ("anytls", "anytls://pw123@203.0.113.18:443#any"),
+        ];
+        for (expected_scheme, uri) in cases {
+            let parsed = ProxyUri::parse(uri).unwrap_or_else(|| panic!("failed {expected_scheme}"));
+            assert_eq!(parsed.scheme, expected_scheme);
+        }
+
+        // Dedup uses canonical protocol + host + port + id (ignoring fragment & alias).
+        let dups = vec![
+            "hy2://tok@edge.example.com:443?sni=a#One".to_string(),
+            "hysteria2://tok@EDGE.EXAMPLE.COM:443?sni=b#Two".to_string(),
+            "hysteria2://other@edge.example.com:443#Three".to_string(),
+        ];
+        let deduped = deduplicate_links(&dups);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0], dups[0]);
+        assert_eq!(deduped[1], dups[2]);
     }
 }

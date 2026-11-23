@@ -72,6 +72,7 @@ pub use discovery::ct_anchors;
 pub use discovery::gh_sources;
 pub use discovery::harvest;
 pub use discovery::ns_anchors;
+pub use discovery::sources;
 pub use discovery::subscription;
 pub use discovery::tg_export;
 pub use egress::blackout_bridge;

@@ -599,9 +599,9 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         depth: usize,
     },
-    /// Harvest free configs from Telegram channels (public previews,
-    /// no browser needed) into a profile's node store. Any supported scheme
-    /// is imported (vless, vmess, trojan, ss, ssr, hysteria2, tuic).
+    /// Harvest free configs from Telegram channels or unified sources into a
+    /// profile's node store. Supports all schemes, protocol filtering, and
+    /// TCP/TLS latency ranking.
     Harvest {
         /// Comma-separated channel handles (with or without leading '@').
         #[arg(long, default_value = "v2ray_config,MARAMBASHI,v2ray_configs_pools")]
@@ -641,22 +641,64 @@ enum Command {
         /// always mined in production — never just the hardcoded seeds.
         #[arg(long)]
         include_saved: bool,
+        /// Filter harvested links by comma-separated protocol names (e.g.
+        /// `vless,hy2,tuic`).
+        #[arg(long, default_value = "")]
+        protocol: String,
+        /// TCP/TLS latency-test harvested links, sort fastest-first, and keep
+        /// only reachable configs.
+        #[arg(long)]
+        test: bool,
+        /// Harvest from all enabled unified sources (`dastyab sources list`)
+        /// instead of only `--channels`.
+        #[arg(long)]
+        sources: bool,
     },
-    /// Ingest free configs from GitHub sources (topic + curated repos) into
-    /// a profile's node store.
+    /// Manage unified config sources (GitHub raw + CDN mirrors, subscription
+    /// URLs, Telegram channels, Telegram posts) and ingest configs.
     Sources {
-        /// Sub-command: ingest | refresh.
+        /// Sub-command: list | add | remove | enable | disable | import |
+        /// export | reset | harvest | ingest | refresh.
         #[arg()]
         action: String,
-        /// Profile to import into (default "default").
+        /// Target URL, channel handle, post link, or source ID
+        /// (for add/remove/enable/disable).
+        #[arg()]
+        arg: Option<String>,
+        /// Profile to operate on (default "default").
         #[arg(long, default_value = "default")]
         profile: String,
         /// Route through the local xray SOCKS5 proxy (use when direct is blocked).
         #[arg(long)]
         proxy: bool,
-        /// Extra comma-separated `owner/repo` repos to include.
+        /// Extra comma-separated `owner/repo` repos to include (ingest/refresh).
         #[arg(long, default_value = "")]
         repos: String,
+        /// Source kind for `add`: github_raw | subscription_url |
+        /// telegram_channel | telegram_post.
+        #[arg(long, default_value = "")]
+        kind: String,
+        /// Display name for `add`.
+        #[arg(long, default_value = "")]
+        name: String,
+        /// Format for `import` / `export` (`json` | `text` | `auto`).
+        #[arg(long, default_value = "auto")]
+        format: String,
+        /// File path for `import` / `export` (omit to use stdin/stdout).
+        #[arg(long, default_value = "")]
+        path: String,
+        /// Replace existing source list when importing instead of merging.
+        #[arg(long)]
+        replace: bool,
+        /// Comma-separated protocol filter for `harvest` (e.g. `vless,hy2`).
+        #[arg(long, default_value = "")]
+        protocol: String,
+        /// TCP/TLS latency-test and keep only reachable links during `harvest`.
+        #[arg(long)]
+        test: bool,
+        /// Archive page depth for Telegram channels during `harvest`.
+        #[arg(long, default_value_t = 3)]
+        depth: usize,
     },
     /// Discover verified-live egress anchors from public certificate-transparency
     /// logs (crt.sh) — an independent, out-of-band bootstrap source that keeps

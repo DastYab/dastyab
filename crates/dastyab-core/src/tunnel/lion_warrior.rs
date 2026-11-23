@@ -1037,6 +1037,7 @@ fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
             .and_then(|t| json_str(t, &["type"]))
             .unwrap_or("tcp");
         let sec = if tls_on { "tls" } else { "none" };
+        let user = json_str(ob, &["username", "user"]);
         let uri = match (proto.as_str(), uuid, pass) {
             ("vless", Some(u), _) => Some(format!(
                 "vless://{u}@{server}:{port}?security={sec}&type={net}&sni={sni}#{alias}"
@@ -1059,12 +1060,34 @@ fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
                     .encode(format!("{method}:{pw}").as_bytes());
                 Some(format!("ss://{creds}@{server}:{port}#{alias}"))
             }
+            ("hysteria", _, _) => {
+                let auth = json_str(ob, &["auth_str", "auth", "password"]).unwrap_or("");
+                if !auth.is_empty() {
+                    Some(format!(
+                        "hysteria://{auth}@{server}:{port}?sni={sni}#{alias}"
+                    ))
+                } else {
+                    Some(format!("hysteria://{server}:{port}?sni={sni}#{alias}"))
+                }
+            }
             ("hysteria2" | "hy2", _, Some(pw)) => Some(format!(
                 "hysteria2://{pw}@{server}:{port}?sni={sni}#{alias}"
             )),
             ("tuic", Some(u), Some(pw)) => {
                 Some(format!("tuic://{u}:{pw}@{server}:{port}?sni={sni}#{alias}"))
             }
+            ("juicity", Some(u), Some(pw)) => Some(format!(
+                "juicity://{u}:{pw}@{server}:{port}?sni={sni}#{alias}"
+            )),
+            ("anytls", _, Some(pw)) => {
+                Some(format!("anytls://{pw}@{server}:{port}?sni={sni}#{alias}"))
+            }
+            ("naive" | "naive+https", _, _) => match (user, pass) {
+                (Some(u), Some(pw)) => {
+                    Some(format!("naive+https://{u}:{pw}@{server}:{port}#{alias}"))
+                }
+                _ => Some(format!("naive+https://{server}:{port}#{alias}")),
+            },
             ("wireguard" | "wg", _, _) => {
                 let pk = json_str(ob, &["private_key", "secretKey"]).unwrap_or("");
                 let peer_pk = json_str(ob, &["peer_public_key", "publicKey"]).unwrap_or("");
@@ -1076,8 +1099,23 @@ fn extract_links_from_json_value(val: &serde_json::Value) -> Vec<String> {
                     None
                 }
             }
-            ("socks" | "socks5", _, _) => Some(format!("socks5://{server}:{port}#{alias}")),
-            ("http", _, _) => Some(format!("http://{server}:{port}#{alias}")),
+            ("socks" | "socks5", _, _) => match (user, pass) {
+                (Some(u), Some(pw)) => Some(format!("socks5://{u}:{pw}@{server}:{port}#{alias}")),
+                _ => Some(format!("socks5://{server}:{port}#{alias}")),
+            },
+            ("http" | "https", _, _) => {
+                let scheme = if proto == "https" || tls_on {
+                    "https"
+                } else {
+                    "http"
+                };
+                match (user, pass) {
+                    (Some(u), Some(pw)) => {
+                        Some(format!("{scheme}://{u}:{pw}@{server}:{port}#{alias}"))
+                    }
+                    _ => Some(format!("{scheme}://{server}:{port}#{alias}")),
+                }
+            }
             _ => None,
         };
         if let Some(u) = uri {
@@ -1199,6 +1237,35 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
                 .encode(format!("{cipher}:{pw}").as_bytes());
             Some(format!("ss://{enc}@{server}:{port}#{name}"))
         }
+        "ssr" => {
+            let cipher = map
+                .get("cipher")
+                .map(String::as_str)
+                .unwrap_or("aes-256-cfb");
+            let pw = map.get("password")?;
+            let obfs = map.get("obfs").map(String::as_str).unwrap_or("plain");
+            let proto_ssr = map.get("protocol").map(String::as_str).unwrap_or("origin");
+            let b64_pw = base64::engine::general_purpose::STANDARD.encode(pw.as_bytes());
+            let raw_ssr = format!("{server}:{port}:{proto_ssr}:{cipher}:{obfs}:{b64_pw}");
+            let enc = base64::engine::general_purpose::STANDARD.encode(raw_ssr.as_bytes());
+            Some(format!("ssr://{enc}#{name}"))
+        }
+        "hysteria" => {
+            let auth = map
+                .get("auth-str")
+                .or_else(|| map.get("auth_str"))
+                .or_else(|| map.get("auth"))
+                .or_else(|| map.get("password"))
+                .map(String::as_str)
+                .unwrap_or("");
+            if !auth.is_empty() {
+                Some(format!(
+                    "hysteria://{auth}@{server}:{port}?sni={sni}#{name}"
+                ))
+            } else {
+                Some(format!("hysteria://{server}:{port}?sni={sni}#{name}"))
+            }
+        }
         "hysteria2" | "hy2" => {
             let pw = map.get("password")?;
             Some(format!("hysteria2://{pw}@{server}:{port}?sni={sni}#{name}"))
@@ -1210,6 +1277,26 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
                 "tuic://{uuid}:{pw}@{server}:{port}?sni={sni}#{name}"
             ))
         }
+        "juicity" => {
+            let uuid = map.get("uuid")?;
+            let pw = map.get("password").map(String::as_str).unwrap_or("");
+            Some(format!(
+                "juicity://{uuid}:{pw}@{server}:{port}?sni={sni}#{name}"
+            ))
+        }
+        "anytls" => {
+            let pw = map.get("password")?;
+            Some(format!("anytls://{pw}@{server}:{port}?sni={sni}#{name}"))
+        }
+        "naive" | "naive+https" => {
+            let user = map.get("username").map(String::as_str).unwrap_or("");
+            let pw = map.get("password").map(String::as_str).unwrap_or("");
+            if !user.is_empty() {
+                Some(format!("naive+https://{user}:{pw}@{server}:{port}#{name}"))
+            } else {
+                Some(format!("naive+https://{server}:{port}#{name}"))
+            }
+        }
         "wireguard" => {
             let pk = map.get("private-key")?;
             let peer_pk = map.get("public-key").map(String::as_str).unwrap_or("");
@@ -1217,8 +1304,29 @@ fn clash_dict_to_uri(map: &HashMap<String, String>) -> Option<String> {
                 "wireguard://{pk}@{server}:{port}?publickey={peer_pk}#{name}"
             ))
         }
-        "socks5" => Some(format!("socks5://{server}:{port}#{name}")),
-        "http" => Some(format!("http://{server}:{port}#{name}")),
+        "socks5" | "socks" => {
+            let user = map.get("username").map(String::as_str).unwrap_or("");
+            let pw = map.get("password").map(String::as_str).unwrap_or("");
+            if !user.is_empty() {
+                Some(format!("socks5://{user}:{pw}@{server}:{port}#{name}"))
+            } else {
+                Some(format!("socks5://{server}:{port}#{name}"))
+            }
+        }
+        "http" | "https" => {
+            let scheme = if ptype == "https" || tls_val {
+                "https"
+            } else {
+                "http"
+            };
+            let user = map.get("username").map(String::as_str).unwrap_or("");
+            let pw = map.get("password").map(String::as_str).unwrap_or("");
+            if !user.is_empty() {
+                Some(format!("{scheme}://{user}:{pw}@{server}:{port}#{name}"))
+            } else {
+                Some(format!("{scheme}://{server}:{port}#{name}"))
+            }
+        }
         _ => None,
     }
 }
@@ -3075,5 +3183,33 @@ mod tests {
         assert_eq!(outs[0]["sockopt"]["dialerProxy"], "entry");
         assert_eq!(outs[1]["protocol"], "wireguard");
         assert_eq!(outs[1]["sockopt"]["dialerProxy"], "frag-dialer");
+    }
+
+    #[test]
+    fn extracts_extended_singbox_json_and_clash_yaml_protocols() {
+        let singbox = r#"{
+            "outbounds": [
+                {"type":"anytls","tag":"any1","server":"203.0.113.30","server_port":443,"password":"p1","tls":{"enabled":true,"server_name":"any.example"}},
+                {"type":"naive","tag":"nv1","server":"203.0.113.31","server_port":443,"username":"u1","password":"p2"},
+                {"type":"http","tag":"hp1","server":"203.0.113.32","server_port":8443,"username":"u2","password":"p3","tls":{"enabled":true}},
+                {"type":"hysteria","tag":"hy1","server":"203.0.113.33","server_port":443,"auth_str":"tok1"}
+            ]
+        }"#;
+        let clash = concat!(
+            "proxies:\n",
+            "  - {name: jc1, type: juicity, server: 203.0.113.34, port: 443, uuid: u-jc, password: p4}\n",
+            "  - {name: ssr1, type: ssr, server: 203.0.113.35, port: 8388, password: p5, cipher: aes-256-cfb}\n",
+            "  - {name: https1, type: https, server: 203.0.113.36, port: 8443, username: u3, password: p6}\n"
+        );
+        let sb_links = extract_all_config_links_from_blob("sb.json", singbox.as_bytes());
+        assert!(sb_links.iter().any(|l| l.starts_with("anytls://")));
+        assert!(sb_links.iter().any(|l| l.starts_with("naive+https://")));
+        assert!(sb_links.iter().any(|l| l.starts_with("https://")));
+        assert!(sb_links.iter().any(|l| l.starts_with("hysteria://")));
+
+        let clash_links = extract_all_config_links_from_blob("clash.yaml", clash.as_bytes());
+        assert!(clash_links.iter().any(|l| l.starts_with("juicity://")));
+        assert!(clash_links.iter().any(|l| l.starts_with("ssr://")));
+        assert!(clash_links.iter().any(|l| l.starts_with("https://")));
     }
 }

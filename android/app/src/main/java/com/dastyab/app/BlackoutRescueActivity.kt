@@ -75,6 +75,9 @@ class BlackoutRescueActivity : DastyabActivity() {
         findViewById<Button>(R.id.btnRunHarvest).setOnClickListener { runSmartHarvest() }
         findViewById<Button>(R.id.btnPickHarvested).setOnClickListener { showHarvestedConfigsDialog() }
         findViewById<Button>(R.id.btnOpenFileVault).setOnClickListener { showConfigFileVaultDialog() }
+        findViewById<Button>(R.id.btnOpenSourceManager).setOnClickListener {
+            startActivity(Intent(this, SourceManagerActivity::class.java))
+        }
         findViewById<Button>(R.id.btnSetBootstrap).setOnClickListener { showBootstrapConfigDialog() }
         findViewById<Button>(R.id.btnActivateDnsBlackout).setOnClickListener { activateDnsBlackoutVpn() }
         findViewById<Button>(R.id.btnScoutEdgeIps).setOnClickListener { runEdgeIpScout() }

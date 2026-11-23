@@ -10,12 +10,15 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- Allow split-tunnel app picker to list launchable apps on Android 11+. -->
+    <!-- Allow split-tunnel app picker and one-tap client shares on Android 11+. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <package android:name="com.v2ray.ang" />
+        <package android:name="app.hiddify.com" />
+        <package android:name="moe.nb4a" />
     </queries>
 
     <application
@@ -57,6 +60,11 @@
             android:name=".VpnLayersActivity"
             android:exported="true"
             android:label="VPN Layers &amp; Harvester Sources"
+            android:theme="@style/DastyabTheme" />
+        <activity
+            android:name=".SourceManagerActivity"
+            android:exported="true"
+            android:label="@string/source_mgr_title"
             android:theme="@style/DastyabTheme" />
         <activity
             android:name=".NetworkToolboxActivity"

@@ -444,7 +444,7 @@ class MainActivity : DastyabActivity() {
             openActivity(VpnLayersActivity::class.java)
         }
         findViewById<View>(R.id.btnSimpleEditSources).setOnClickListener {
-            openActivity(VpnLayersActivity::class.java)
+            openActivity(SourceManagerActivity::class.java)
         }
         findViewById<View>(R.id.btnSimpleToolbox).setOnClickListener {
             openActivity(NetworkToolboxActivity::class.java)

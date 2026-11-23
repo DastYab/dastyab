@@ -376,4 +376,113 @@ class UniversalConfigTest {
         assertTrue(json.contains("\"fingerprint\":\"chrome\""))
         assertTrue(json.contains("\"fragment\""))
     }
+
+    @Test
+    fun parseAndExtract_coversEveryRequiredSchemeAndExplicitHttpHttpsProxies() {
+        val schemes = listOf(
+            "vless://11111111-2222-3333-4444-555555555555@vless.example.com:443?security=tls#vless",
+            "vmess://${encodeBase64("""{"v":"2","ps":"vm","add":"vmess.example.com","port":"443","id":"22222222-2222-2222-2222-222222222222"}""")}",
+            "trojan://trpass@trojan.example.com:443#trojan",
+            "ss://${encodeBase64("aes-256-gcm:sspass")}@ss.example.com:8388#ss",
+            "ssr://${encodeBase64("1.2.3.4:10001:origin:aes-256-cfb:plain:c3NycGFzcw==")}#ssr",
+            "hysteria://hy1tok@hy1.example.com:5678?sni=hy1.example.com#hy1",
+            "hysteria://hy1q.example.com:5679?auth=hy1qtok&sni=hy1q.example.com#hy1q",
+            "hysteria2://hy2pass@hy2.example.com:8443?sni=hy2.example.com#hy2",
+            "hy2://hy2short@hy2s.example.com:8444#hy2short",
+            "tuic://uuid123:tuicpw@tuic.example.com:9443#tuic",
+            "wireguard://privKeyA@162.159.192.1:2408?publickey=pubA#wg1",
+            "wg://privKeyB@162.159.192.2:2408?publickey=pubB#wg2",
+            "socks://suser:spass@socks.example.com:1080#socks",
+            "socks5://s5user:s5pass@socks5.example.com:1081#socks5",
+            "http://huser:hpass@httpproxy.example.com:8080#http",
+            "https://hsuser:hspass@httpsproxy.example.com:8443#https",
+            "naive+https://nuser:npass@naive.example.com:443#naive",
+            "juicity://juuid:jpass@juicity.example.com:443#juicity",
+            "anytls://apass@anytls.example.com:443#anytls"
+        )
+        for (uri in schemes) {
+            val ep = UniversalConfig.parse(uri)
+            assertNotNull("Expected parse success for $uri", ep)
+            assertTrue("Expected non-empty id for $uri", ep!!.id.isNotEmpty() || ep.protocol == "http")
+        }
+
+        val mixedSub = schemes.joinToString("\n")
+        val layer1 = encodeBase64(mixedSub)
+        val layer2 = encodeBase64(layer1)
+        val extracted = UniversalConfig.extractAll(layer2)
+        assertTrue("Expected >= 17 extracted URIs, got ${extracted.size}", extracted.size >= 17)
+        assertTrue(extracted.any { it.startsWith("https://hsuser:hspass@httpsproxy.example.com:8443") })
+        assertTrue(extracted.any { it.startsWith("naive+https://nuser:npass@naive.example.com:443") })
+        assertTrue(extracted.any { it.startsWith("juicity://") })
+        assertTrue(extracted.any { it.startsWith("anytls://") })
+    }
+
+    @Test
+    fun extractJsonConfigs_andClashYaml_parsesNestedSingBoxOutboundsAndAllProtocols() {
+        val singboxJson = """
+            {
+              "outbounds": [
+                {"type":"direct","tag":"direct"},
+                {"type":"vless","tag":"sb-vless","server":"sb-vless.example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","tls":{"enabled":true,"server_name":"cdn.example.com"},"transport":{"type":"ws"}},
+                {"type":"hysteria","tag":"sb-hy1","server":"sb-hy1.example.com","server_port":4000,"auth_str":"hy1-token","tls":{"enabled":true,"server_name":"sb-hy1.example.com"}},
+                {"type":"naive","tag":"sb-naive","server":"sb-naive.example.com","server_port":443,"username":"u1","password":"p1"},
+                {"type":"juicity","tag":"sb-jui","server":"sb-jui.example.com","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222","password":"jpw"},
+                {"type":"anytls","tag":"sb-any","server":"sb-any.example.com","server_port":8443,"password":"apw"}
+              ]
+            }
+        """.trimIndent()
+        val jsonUris = UniversalConfig.extractJsonConfigs(singboxJson)
+        assertTrue(jsonUris.any { it.startsWith("vless://") && it.contains("sb-vless.example.com:443") && it.contains("sni=cdn.example.com") })
+        assertTrue(jsonUris.any { it.startsWith("hysteria://sb-hy1.example.com:4000") && it.contains("auth=hy1-token") })
+        assertTrue(jsonUris.any { it.startsWith("naive+https://u1:p1@sb-naive.example.com:443") })
+        assertTrue(jsonUris.any { it.startsWith("juicity://") && it.contains("sb-jui.example.com:443") })
+        assertTrue(jsonUris.any { it.startsWith("anytls://apw@sb-any.example.com:8443") })
+
+        val clashYaml = """
+            proxies:
+              - name: ClashSSR
+                type: ssr
+                server: 198.51.100.5
+                port: 10001
+                cipher: aes-256-cfb
+                protocol: origin
+                obfs: plain
+                password: ssrpw
+              - name: ClashNaive
+                type: naive+https
+                server: naive.yaml.example.com
+                port: 443
+                username: nu
+                password: np
+              - name: ClashAnyTLS
+                type: anytls
+                server: anytls.yaml.example.com
+                port: 8443
+                password: apw
+                sni: anytls.yaml.example.com
+        """.trimIndent()
+        val clashUris = UniversalConfig.extractClashYamlConfigs(clashYaml)
+        assertTrue(clashUris.any { it.startsWith("ssr://") })
+        assertTrue(clashUris.any { it.startsWith("naive+https://nu:np@naive.yaml.example.com:443") })
+        assertTrue(clashUris.any { it.startsWith("anytls://apw@anytls.yaml.example.com:8443") })
+    }
+
+    @Test
+    fun deduplicate_collapsesAliasesWithMatchingProtocolHostPortAndId() {
+        val dupes = listOf(
+            "hy2://samepass@EDGE.Example.com:8443?sni=a#First",
+            "hysteria2://samepass@edge.example.com:8443?sni=b#DuplicateLabel",
+            "hy2://differentpass@edge.example.com:8443#DifferentSecret",
+            "wg://samekey@162.159.192.1:2408#FirstWG",
+            "wireguard://samekey@162.159.192.1:2408#SecondWG",
+            "socks://u1:p1@198.51.100.9:1080#S1",
+            "socks5://u1:p1@198.51.100.9:1080#S2"
+        )
+        val deduped = UniversalConfig.deduplicate(dupes)
+        assertEquals(4, deduped.size)
+        assertEquals("hy2://samepass@EDGE.Example.com:8443?sni=a#First", deduped[0])
+        assertEquals("hy2://differentpass@edge.example.com:8443#DifferentSecret", deduped[1])
+        assertEquals("wg://samekey@162.159.192.1:2408#FirstWG", deduped[2])
+        assertEquals("socks://u1:p1@198.51.100.9:1080#S1", deduped[3])
+    }
 }

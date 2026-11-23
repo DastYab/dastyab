@@ -182,10 +182,48 @@ fn extract_links(body: &str) -> Vec<String> {
     crate::tunnel::lion_warrior::extract_all_config_links_from_blob("repo.txt", body.as_bytes())
 }
 
+/// Return candidate URLs for a GitHub raw file: direct `raw.githubusercontent.com`
+/// first, then `cdn.jsdelivr.net` and `cdn.statically.io` CDN mirrors for censorship
+/// resilience when raw GitHub is throttled or blocked.
+pub fn raw_mirror_urls(repo: &str, branch: &str, path: &str) -> Vec<String> {
+    let clean_repo = repo.trim().trim_matches('/');
+    let clean_branch = branch.trim().trim_matches('/');
+    let clean_path = path.trim().trim_start_matches('/');
+    vec![
+        format!("https://raw.githubusercontent.com/{clean_repo}/{clean_branch}/{clean_path}"),
+        format!("https://cdn.jsdelivr.net/gh/{clean_repo}@{clean_branch}/{clean_path}"),
+        format!("https://cdn.statically.io/gh/{clean_repo}/{clean_branch}/{clean_path}"),
+    ]
+}
+
+async fn fetch_file_bytes_with_mirrors(
+    client: &reqwest::Client,
+    repo: &str,
+    branch: &str,
+    path: &str,
+) -> Option<Vec<u8>> {
+    for raw_url in raw_mirror_urls(repo, branch, path) {
+        let Ok(resp) = client.get(&raw_url).send().await else {
+            continue;
+        };
+        if resp.status().as_u16() != 200 {
+            continue;
+        }
+        let Ok(bytes) = resp.bytes().await else {
+            continue;
+        };
+        if !bytes.is_empty() && bytes.len() <= MAX_FILE_BYTES {
+            return Some(bytes.to_vec());
+        }
+    }
+    None
+}
+
 /// Fetch one repo's config files and return all validated share-links.
 ///
 /// We do a shallow `git ls-remote` style probe via the API tree to find
-/// config files, then fetch each raw file and extract links.
+/// config files, then fetch each raw file (with CDN mirror fallbacks) and
+/// extract links.
 pub async fn fetch_repo_links(
     client: &reqwest::Client,
     repo: &str,
@@ -232,20 +270,13 @@ pub async fn fetch_repo_links(
 
     let mut all = Vec::new();
     for (path, _size) in files {
-        let raw_url = format!("https://raw.githubusercontent.com/{repo}/{branch}/{path}");
-        let resp = client.get(&raw_url).send().await;
-        let Ok(resp) = resp else { continue };
-        if resp.status().as_u16() != 200 {
-            continue;
-        }
-        let Ok(bytes) = resp.bytes().await else {
+        let Some(bytes) = fetch_file_bytes_with_mirrors(client, repo, branch, &path).await else {
             continue;
         };
-        if bytes.len() > MAX_FILE_BYTES {
-            continue;
-        }
         let fname = path.rsplit('/').next().unwrap_or(&path);
-        all.extend(crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes));
+        all.extend(
+            crate::tunnel::lion_warrior::extract_all_config_links_from_blob(fname, &bytes),
+        );
     }
     Ok(all)
 }
@@ -354,5 +385,23 @@ mod tests {
         assert!(looks_like_config("all/configs.txt"));
         assert!(!looks_like_config("README.md"));
         assert!(!looks_like_config("src/main.rs"));
+    }
+
+    #[test]
+    fn raw_mirror_urls_includes_raw_jsdelivr_and_statically() {
+        let urls = raw_mirror_urls("barry-far/V2ray-Configs", "main", "/All_Configs_Sub.txt");
+        assert_eq!(urls.len(), 3);
+        assert_eq!(
+            urls[0],
+            "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_Sub.txt"
+        );
+        assert_eq!(
+            urls[1],
+            "https://cdn.jsdelivr.net/gh/barry-far/V2ray-Configs@main/All_Configs_Sub.txt"
+        );
+        assert_eq!(
+            urls[2],
+            "https://cdn.statically.io/gh/barry-far/V2ray-Configs/main/All_Configs_Sub.txt"
+        );
     }
 }
