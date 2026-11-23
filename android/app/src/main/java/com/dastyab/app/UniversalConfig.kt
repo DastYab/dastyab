@@ -482,7 +482,7 @@ object UniversalConfig {
                 val firstUser = users?.firstOrNull() as? Map<*, *>
                 val uid = jsonStr(firstUser?.get("id")) ?: jsonStr(firstUser?.get("uuid")) ?: "11111111-1111-1111-1111-111111111111"
                 val scheme = if (protoType == "vmess") "vmess" else "vless"
-                buildJsonShareUri(scheme, addr, port, uid, "", "", sni, net, tagStr, tlsEnabled, emptyMap(), out)
+                buildJsonShareUri(scheme, addr, port, uid, "", "", sni, net, tagStr, tlsEnabled, emptyMap<String, String>(), out)
             }
         }
         val serversList = settingsMap?.get("servers") as? List<*>
