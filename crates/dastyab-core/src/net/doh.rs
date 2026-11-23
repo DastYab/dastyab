@@ -116,7 +116,7 @@ impl DohResolver {
     /// transport (endpoint hostnames pinned to literal IPs).
     pub fn new() -> Self {
         let client =
-            build_real_client(DEFAULT_ENDPOINTS).expect("default DoH client build should succeed");
+            build_real_client(DEFAULT_ENDPOINTS).unwrap_or_else(|_| reqwest::Client::new());
         Self {
             endpoints: DEFAULT_ENDPOINTS.to_vec(),
             backend: DohBackend::Real(client),

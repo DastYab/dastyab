@@ -90,50 +90,50 @@ pub fn random_ws_key() -> String {
 pub fn randomize_ws_request(rng: &mut impl Rng, base_req: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(base_req);
     let lines: Vec<&str> = text.lines().collect();
-    // Shuffle the header lines (keep the request line first).
-    if lines.len() > 1 {
-        let (first, rest) = lines.split_first().unwrap();
-        let mut rest = rest.to_vec();
-        // Fisher–Yates partial shuffle.
-        for i in (1..rest.len()).rev() {
-            let j = rng.gen_range(0..=i);
-            rest.swap(i, j);
+    let Some((first, rest)) = lines.split_first() else {
+        return base_req.to_vec();
+    };
+    if rest.is_empty() {
+        return base_req.to_vec();
+    }
+    let mut rest = rest.to_vec();
+    // Fisher–Yates partial shuffle.
+    for i in (1..rest.len()).rev() {
+        let j = rng.gen_range(0..=i);
+        rest.swap(i, j);
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(first.as_bytes());
+    out.push(b'\r');
+    out.push(b'\n');
+    for line in rest {
+        // Randomly flip casing of the header *name* (before the colon).
+        if let Some((name, value)) = line.split_once(':') {
+            if rng.gen_bool(0.5) {
+                let cased: String = name
+                    .chars()
+                    .map(|c| {
+                        if rng.gen_bool(0.5) {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c.to_ascii_lowercase()
+                        }
+                    })
+                    .collect();
+                out.extend_from_slice(cased.as_bytes());
+            } else {
+                out.extend_from_slice(name.as_bytes());
+            }
+            out.push(b':');
+            out.extend_from_slice(value.as_bytes());
+        } else {
+            out.extend_from_slice(line.as_bytes());
         }
-        let mut out = Vec::new();
-        out.extend_from_slice(first.as_bytes());
         out.push(b'\r');
         out.push(b'\n');
-        for line in rest {
-            // Randomly flip casing of the header *name* (before the colon).
-            if let Some((name, value)) = line.split_once(':') {
-                if rng.gen_bool(0.5) {
-                    let cased: String = name
-                        .chars()
-                        .map(|c| {
-                            if rng.gen_bool(0.5) {
-                                c.to_ascii_uppercase()
-                            } else {
-                                c.to_ascii_lowercase()
-                            }
-                        })
-                        .collect();
-                    out.extend_from_slice(cased.as_bytes());
-                } else {
-                    out.extend_from_slice(name.as_bytes());
-                }
-                out.push(b':');
-                out.extend_from_slice(value.as_bytes());
-            } else {
-                out.extend_from_slice(line.as_bytes());
-            }
-            out.push(b'\r');
-            out.push(b'\n');
-        }
-        out.extend_from_slice(b"\r\n");
-        out
-    } else {
-        base_req.to_vec()
     }
+    out.extend_from_slice(b"\r\n");
+    out
 }
 
 /// Browser TLS fingerprint profiles. DeepSeek's phase-2 resurrection spec:

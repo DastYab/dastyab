@@ -69,12 +69,16 @@ impl Default for DesyncConfig {
 
 /// Install the active desync config (normally from a loaded profile).
 pub fn set_config(cfg: DesyncConfig) {
-    *CFG.lock().unwrap() = Some(cfg);
+    let mut guard = CFG.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(cfg);
 }
 
 /// Read the active config — defaults (disabled) if never set.
 pub fn active_config() -> DesyncConfig {
-    CFG.lock().unwrap().clone().unwrap_or_default()
+    CFG.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
 }
 
 /// Load a profile and install its desync config. No-op if the profile can't

@@ -96,15 +96,18 @@ pub async fn resolve(host: &str, endpoints: &[DotEndpoint]) -> Result<Vec<Ipv4Ad
 /// a process-level `CryptoProvider` having been installed (which only happens
 /// in `main` via `tls::install_provider`). That makes DoT robust to being
 /// embedded or called before app setup.
-fn tls_config() -> rustls::ClientConfig {
+fn tls_config() -> Result<rustls::ClientConfig, CFError> {
     use std::sync::Arc;
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .expect("default protocol versions should be compatible")
-        .with_root_certificates(roots)
-        .with_no_client_auth()
+    let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| CFError::new("DoT TLS", format!("protocol version error: {e}"), ""))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(cfg)
 }
 
 /// Perform one DoT exchange against `ep`.
@@ -116,7 +119,7 @@ async fn query_endpoint(ep: &DotEndpoint, query: &[u8]) -> Result<Vec<u8>, CFErr
         .map_err(|e| CFError::new("DoT connect", format!("{e}"), ""))?;
 
     // TLS with SNI = the endpoint host (cert verification against the real name).
-    let config = tls_config();
+    let config = tls_config()?;
     let connector = TlsConnector::from(Arc::new(config));
     let sni =
         ServerName::try_from(ep.sni).map_err(|_| CFError::new("DoT TLS", "Invalid SNI.", ""))?;
@@ -173,7 +176,7 @@ mod tests {
         // config must contain the Mozilla webpki roots. It must also build with
         // no process-level CryptoProvider installed (self-contained), which is
         // what this construction path verifies.
-        let _cfg = tls_config();
+        let _cfg = tls_config().expect("tls config should succeed");
         // Confirm the Mozilla root bundle is non-empty — the data the config
         // loaded into its RootCertStore.
         assert!(webpki_roots::TLS_SERVER_ROOTS.len() > 100);

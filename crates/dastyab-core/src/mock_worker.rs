@@ -44,7 +44,7 @@ pub struct MockWorkerConfig {
 impl Default for MockWorkerConfig {
     fn default() -> Self {
         Self {
-            listen_addr: "127.0.0.1:18443".parse().unwrap(),
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], 18443)),
             worker_path: "/api".to_string(),
             ws_payload_bytes: 4096,
             trace_ip: "198.51.100.1".to_string(),

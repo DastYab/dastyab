@@ -109,6 +109,7 @@ pub struct Client {
 }
 
 impl Client {
+    /// Create a new Cloudflare API client with the default production base URL.
     pub fn new(token: &str) -> Self {
         Self::with_base(token, API)
     }
@@ -134,7 +135,7 @@ impl Client {
                 .timeout(std::time::Duration::from_secs(25))
                 .user_agent("dastyab")
                 .build()
-                .expect("failed to build HTTP client"),
+                .unwrap_or_else(|_| reqwest::Client::new()),
             timeout: std::time::Duration::from_secs(25),
             base_url: base_url.to_string(),
         }
